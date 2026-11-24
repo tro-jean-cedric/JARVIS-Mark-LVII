@@ -53,8 +53,8 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | gmail_control | Check, read, search, send, draft Gmail (OAuth) | ✅ | Send behind confirm; mark_read undoable. Needs your own Google "Desktop app" OAuth client (⚙ → Plugin settings → Google) |
 | calendar_control | Read Google Calendar, create events (OAuth) | ✅ | agenda/next/search/add; natural dates (ISO → model → rule parser); local TZ; add is undoable |
 | subscription_radar | Find paid subscriptions from Gmail receipts, monthly total | ✅ | Background scan (≤400 mails/12 months), model + rule fallback, per-currency monthly total, renewal reminders |
-| telegram_remote | Control the PC from the user's own Telegram bot; push screenshots/status | ⬜ | |
-| whatsapp_call | Place / end a WhatsApp (video) call to a contact | ⬜ | |
+| telegram_remote | Control the PC from the user's own Telegram bot; push screenshots/status | ✅ | Own BotFather token; pairing code; text + voice notes; /screen /cam /sys /get; risky steps confirmed twice on the phone; panic switch; content-free step log. Matches the interface `core/cloud.py` expects |
+| whatsapp_call | Place / end a WhatsApp (video) call to a contact | 🟡 | Desktop app (Windows, pywinauto) or WhatsApp Web (Playwright); call behind confirm; refuses wrong chat. **Untested against real WhatsApp** |
 | calorie_counter | Food on webcam → calories & macros | ✅ | Webcam/photo/dropped file; daily log (today/undo/clear) |
 | fridge_chef | Fridge photo → 3 dishes → step-by-step cooking with timers | ✅ | look → cook → next/repeat/stop; spoken step timers |
 | paper_reminders | Paper/photo/PDF → reminders (bills, appointments, medicine) | ✅ | One-offs via `reminder`, repeating via routines engine; no duplicates. (No `help` action — any call reads a paper) |
@@ -79,7 +79,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | dev_agent | Coding agent | ➖ | `actions/dev_agent.py` |
 | flight_finder | Flight search | ➖ | `actions/flight_finder.py` |
 | game_updater | Steam/game updates | ➖ | `actions/game_updater.py` |
-| cloud_agent | "Cloud body": repeating phone reminders, briefings, sync, export | ⬜ | Targets JARVIS's own self-hosted `core/cloud.py`, not Torvis's servers |
+| cloud_agent | "Cloud body": repeating phone reminders, briefings, sync, export | 🟡 | Client for JARVIS's own self-hosted `core/cloud.py` (pinned TLS): sync, Telegram hand-over, delegate/jobs, repeating reminders, briefing, `mirror_reminder`. export/delete cover only what the server exposes (no server routes for memory export / wipe) |
 
 ## Built-in actions (Torvis `actions/*.py`)
 
