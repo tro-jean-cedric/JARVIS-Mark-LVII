@@ -714,6 +714,7 @@ class JarvisLive:
         # checks it: a session that resumes with an old "goodbye" in its context,
         # or a noise heard as "stop", must not close the app on its own.
         self._last_user_input_at = 0.0
+        self._last_user_text = ""      # what that input was, for the shutdown log line
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
@@ -1378,6 +1379,8 @@ class JarvisLive:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
         self._last_user_input_at = time.monotonic()   # real input (see shutdown_jarvis)
+        self._last_user_text = f"(typed) {text[:200]}"
+        print(f"[JARVIS] ⌨ You: {text[:300]}")
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -1848,12 +1851,16 @@ class JarvisLive:
                 # Nothing was said or typed in the last 30 s: this is a resumed
                 # session acting on an old goodbye, or noise heard as "stop".
                 # Closing the app is not something to do on a guess.
-                print("[JARVIS] shutdown_jarvis refused — no recent user input")
+                print("[JARVIS] shutdown_jarvis refused — no recent user input "
+                      f"(last heard: {self._last_user_text!r})")
                 result = ("status=refused reason=\"the user has not said or typed anything just "
                           "now\" -- Do NOT close. Carry on normally; if they want to close the "
                           "assistant they will say so.")
 
             elif name == "shutdown_jarvis":
+                print(f"[JARVIS] shutdown_jarvis accepted — last heard "
+                      f"{time.monotonic() - self._last_user_input_at:.0f}s ago: "
+                      f"{self._last_user_text!r}")
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
                     # The goodbye is said while the summary is written, and the
@@ -2215,6 +2222,7 @@ class JarvisLive:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
                                 self._last_user_input_at = self._last_user_speech
+                                self._last_user_text = " ".join(in_buf)[-200:]
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2232,6 +2240,10 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self._last_out_logged = ""   # new exchange
+                                # Also on the console: tool calls are printed
+                                # there, and without the words that led to
+                                # them a wrong call cannot be diagnosed.
+                                print(f"[JARVIS] 🗣 You: {full_in[:300]}")
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
                                 if self._dashboard:
