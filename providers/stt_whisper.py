@@ -77,6 +77,16 @@ def _threads() -> int:
     return max(1, min(8, n // 2))
 
 
+def _active_languages() -> list[str]:
+    """The user's active language codes (core/languages.py); [] = any. Read
+    on every recognition so a change applies without reloading the model."""
+    try:
+        from core import languages
+        return languages.active()
+    except Exception:
+        return []
+
+
 class WhisperSTT:
     def __init__(self, cfg: dict):
         self.backend = (cfg.get("backend") or "local").strip().lower()
@@ -134,10 +144,10 @@ class WhisperSTT:
                     f"{_threads()} threads)")
             return self._model
 
-    def _transcribe_blocking(self, samples) -> str:
+    def _run_whisper(self, samples, language):
         segments, info = self._model.transcribe(
             samples,
-            language=self.language or None,     # None = detect it
+            language=language or None,          # None = detect it
             beam_size=1,          # greedy: a voice command is short and beam
                                   # search costs multiples of the time for an
                                   # accuracy gain that does not show up here
@@ -148,9 +158,26 @@ class WhisperSTT:
                                                 # steering every one after it
         )
         # The work happens HERE — `segments` is a generator.
-        text = " ".join(s.text.strip() for s in segments).strip()
+        return " ".join(s.text.strip() for s in segments).strip(), info
+
+    def _transcribe_blocking(self, samples) -> str:
+        # Active languages (core/languages.py): one → Whisper is locked to it;
+        # several → detect, and if the guess is not one of them, transcribe
+        # again as the most likely ACTIVE language. A language set in this
+        # provider's own settings still wins.
+        active = _active_languages()
+        forced = self.language or (active[0] if len(active) == 1 else "")
+        text, info = self._run_whisper(samples, forced)
+        detected = str(getattr(info, "language", "") or "")
+        if not forced and active and detected and detected not in active:
+            probs = getattr(info, "all_language_probs", None) or []
+            best = max(((c, p) for c, p in probs if c in active),
+                       key=lambda cp: cp[1], default=(active[0], 0.0))[0]
+            print(f"[STT] heard as {detected}, not active - transcribing again as {best}")
+            text, info = self._run_whisper(samples, best)
+            detected = best
         self._accept_language(
-            str(getattr(info, "language", "") or ""),
+            str(getattr(info, "language", "") or "") or detected,
             float(getattr(info, "language_probability", 0.0) or 0.0),
             text,
         )
@@ -188,6 +215,10 @@ class WhisperSTT:
         code = code.strip().lower()
         if not code:
             return
+        active = _active_languages()
+        if active and code not in active:
+            # Never let the voice follow a language the user switched off.
+            code = self.detected_language if self.detected_language in active else active[0]
         if not self.detected_language:
             self.detected_language = code
             return
@@ -210,8 +241,10 @@ class WhisperSTT:
         wav = audio.to_wav(pcm, rate=sample_rate)
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         data = {"model": self.model_name, "response_format": "json"}
-        if self.language:
-            data["language"] = self.language
+        active = _active_languages()
+        lang = self.language or (active[0] if len(active) == 1 else "")
+        if lang:
+            data["language"] = lang
         with httpx.Client(timeout=60.0, trust_env=not _is_loopback(base)) as cl:
             r = cl.post(f"{base}/audio/transcriptions", headers=headers,
                         data=data,

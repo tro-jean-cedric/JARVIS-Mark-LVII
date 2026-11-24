@@ -86,6 +86,30 @@ from memory.config_manager     import (
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
 from core                     import gemini as _gemini
+def _lang_choice(lang: str) -> str:
+    """The language to use where code picks one (greeting, briefing, notices,
+    summaries): unchanged in automatic mode, otherwise kept inside the user's
+    active languages (core/languages.py)."""
+    try:
+        from core import languages
+        return lang if languages.is_automatic() else languages.resolve_name(lang)
+    except Exception:
+        return lang
+
+
+def _lang_clause(lang: str, automatic_clause: str) -> str:
+    """The language sentence for a one-off instruction. In automatic mode the
+    caller's own sentence ("…unless the user has since spoken another
+    language"); with active languages, a sentence that stays inside them."""
+    try:
+        from core import languages
+        if not languages.is_automatic():
+            return languages.clause(lang)
+    except Exception:
+        pass
+    return automatic_clause
+
+
 # Face Lock's state, read by the microphone callback. Optional: without the
 # plugin's helper the microphone simply behaves as before.
 try:
@@ -656,6 +680,7 @@ class JarvisLive:
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
+        self.ui.on_language_change = self._on_language_change # active languages → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
@@ -1063,8 +1088,8 @@ class JarvisLive:
             memory = await asyncio.to_thread(load_memory)
             lang_e = (memory.get("identity", {}) or {}).get("language", {})
             lang = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip()
-            lang_clause = (f" Speak in {lang} unless the user has since spoken another "
-                           f"language." if lang else "")
+            lang_clause = _lang_clause(lang, (f" Speak in {lang} unless the user has since "
+                                              f"spoken another language." if lang else ""))
             await self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": recap.instruction(summary, tip, lang_clause)}]},
                 turn_complete=True,
@@ -1116,6 +1141,7 @@ class JarvisLive:
             memory = load_memory()
             lang_e = memory.get("identity", {}).get("language", {})
             lang   = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip() or "English"
+            lang   = _lang_choice(lang)
             for alert in alerts:
                 if not self.session:
                     return
@@ -1210,6 +1236,44 @@ class JarvisLive:
         self._reconnect_reason = reason
         if loop and ev is not None:
             loop.call_soon_threadsafe(ev.set)
+
+    def _enforce_language(self, reply: str, user_text: str = "") -> None:
+        """Active languages (core/languages.py): if the reply just spoken was in
+        a language the user has not switched on, have it said again in an
+        allowed one. At most once every 20 s, so a correction can never set off
+        another one; no-op in automatic mode or for short replies."""
+        if user_text:
+            self._lang_last_user = user_text
+        now = time.monotonic()
+        if now - getattr(self, "_lang_fix_at", 0.0) < 20 or not self.session:
+            return
+        try:
+            from core import languages
+            fix = languages.check_reply(reply, getattr(self, "_lang_last_user", ""))
+        except Exception as e:
+            print(f"[Languages] check skipped: {e}")
+            return
+        if not fix:
+            return
+        self._lang_fix_at = now
+        print("[Languages] reply was outside the active languages — asking for it again")
+        session = self.session
+
+        async def _send():
+            try:
+                await session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": fix}]}, turn_complete=True)
+            except Exception as e:
+                print(f"[Languages] correction not sent: {e}")
+
+        asyncio.create_task(_send())
+
+    def _on_language_change(self):
+        """Active languages changed (Customise → Languages, or by voice). The
+        rule lives in the system instruction, so the session is rebuilt — and
+        without the resumption handle, like a voice change: resuming would bring
+        back the old instruction and with it the old language rule."""
+        self.request_reconnect(keep_context=False, reason="active languages changed")
 
     def _on_voice_change(self):
         """Voice picker applied.
@@ -1555,6 +1619,16 @@ class JarvisLive:
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
+        # [ACTIVE LANGUAGES] (core/languages.py) goes LAST on purpose: it
+        # overrides the "answer in the language of the latest message" rule in
+        # prompt.txt when the user has limited the languages. Empty = automatic.
+        try:
+            from core import languages as _languages
+            _lang_block = _languages.prompt_block()
+            if _lang_block:
+                parts.append(_lang_block)
+        except Exception as _e:
+            print(f"[JARVIS] language block skipped: {_e}")
 
         cfg = dict(
             response_modalities=["AUDIO"],
@@ -2165,6 +2239,7 @@ class JarvisLive:
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                                self._enforce_language(full_out, full_in)
                             out_buf = []
 
                             if self._vision_close_pending:
@@ -2375,9 +2450,10 @@ class JarvisLive:
         # The briefing fires before the user has said anything, so the
         # remembered language is the only signal there is. It is a starting
         # point, not a setting: the moment they reply, their language wins.
-        lang_clause = (f" Speak this greeting in {lang}, then follow the "
-                       f"user's own language from their first reply onward."
-                       if lang else "")
+        lang = _lang_choice(lang)        # unchanged when automatic; else an active language
+        lang_clause = _lang_clause(lang, (f" Speak this greeting in {lang}, then follow the "
+                                          f"user's own language from their first reply onward."
+                                          if lang else ""))
         name_clause = f" Address the user as {name}." if name else ""
 
         # Inject last session context if available — pop removes it so it's never repeated
@@ -2414,9 +2490,9 @@ class JarvisLive:
         # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
         async def _deliver_news():
             try:
-                lang_str = (f" Speak in {lang} unless the user has since "
-                            f"spoken another language, in which case use theirs."
-                            if lang else "")
+                lang_str = _lang_clause(lang, (f" Speak in {lang} unless the user has since "
+                                               f"spoken another language, in which case use theirs."
+                                               if lang else ""))
 
                 # Wait for news fetch (already running) and Phase 1 turn-complete
                 # in parallel — whichever takes longer determines the wait time
@@ -2483,7 +2559,7 @@ class JarvisLive:
         memory = load_memory()
         lang_entry = memory.get("identity", {}).get("language", {})
         lang = (lang_entry.get("value", "") if isinstance(lang_entry, dict) else str(lang_entry)).strip()
-        lang = lang or "English"
+        lang = _lang_choice(lang or "English")
 
         convo = "\n".join(log[-40:])   # cap at last 40 turns to stay within token budget
         prompt = (
@@ -2540,6 +2616,7 @@ class JarvisLive:
                         memory = load_memory()
                         lang_e = memory.get("identity", {}).get("language", {})
                         lang   = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip() or "English"
+                        lang   = _lang_choice(lang)
                         for alert in alerts:
                             msg = (
                                 f"{alert}\n\n"

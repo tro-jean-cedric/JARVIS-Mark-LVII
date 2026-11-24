@@ -152,6 +152,17 @@ class JarvisUI:
         self._win.on_voice_change = cb
 
     @property
+    def on_language_change(self):
+        """Callable () -> None: the active languages changed; rebuild the
+        session (main.py). Called from the Customise overlay and the
+        `languages` voice tool."""
+        return self._win.on_language_change
+
+    @on_language_change.setter
+    def on_language_change(self, cb):
+        self._win.on_language_change = cb
+
+    @property
     def on_audio_device_change(self):
         return self._win.on_audio_device_change
 

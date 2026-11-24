@@ -71,6 +71,8 @@ tinytuya                     # home_assistant — Tuya / Smart Life bulbs
 paho-mqtt                    # printer_control — MQTT printers
 openpyxl                     # excel_writer — spreadsheet output
 youtube-transcript-api       # youtube_video — transcript fetch for summaries
+py3langid>=0.3,<1            # core/languages.py — checks a reply is in an ACTIVE language
+                             # (offline, ~5 MB; without it a writing-system check is used)
 pygetwindow                  # game_updater, chat_takeover — window geometry
 
 # ── Windows-only (pip skips these automatically on macOS / Linux) ─────────────

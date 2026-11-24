@@ -323,6 +323,26 @@ def save_media_resolution(value: str) -> None:
     _save_flag("media_resolution", v if v in MEDIA_RESOLUTIONS else "medium")
 
 
+def get_active_languages() -> list[str]:
+    """Language codes the assistant may hear and speak (core/languages.py).
+    [] means automatic: any language, following the user's latest message."""
+    raw = load_api_keys().get("active_languages") or []
+    if isinstance(raw, str):
+        raw = [p for p in raw.replace(";", ",").split(",")]
+    out: list[str] = []
+    for c in raw:
+        c = str(c or "").strip().lower()
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+def save_active_languages(codes: list[str]) -> None:
+    """Store the active languages ([] = automatic). Codes are checked against
+    core/languages.py's table by the caller."""
+    _save_flag("active_languages", [str(c).strip().lower() for c in (codes or []) if str(c).strip()])
+
+
 @_locked
 def _save_flag(key: str, value) -> None:
     """Read-modify-write one key without disturbing the rest of the config."""

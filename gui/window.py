@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
+        self.on_language_change = None  # callable: () -> None — rebuild session with new active languages
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by JarvisLive
@@ -2750,6 +2751,7 @@ class MainWindow(QMainWindow):
         )
         ov.on_preview = self._preview_ui_color
         ov.saved.connect(self._apply_name_update)
+        ov.languages_saved.connect(self._apply_languages)
         ov.show()
         self._customize_overlay = ov
 
@@ -2758,6 +2760,23 @@ class MainWindow(QMainWindow):
         old = current_palette()
         if apply_ui_accent(hex_color):
             retheme_all_widgets(old, current_palette())
+
+    def _apply_languages(self, codes: list) -> None:
+        """Customise → LANGUAGES applied: store them and rebuild the session so
+        the new rule (core/languages.py) is in its instructions."""
+        try:
+            from core import languages
+            saved = languages.set_active(codes)
+            label = ", ".join(languages.native(c) for c in saved) if saved else "automatic (any language)"
+            self._log.append_log(f"SYS: Languages set — {label}.")
+        except Exception as e:
+            self._log.append_log(f"SYS: Languages not saved: {e}")
+            return
+        if self.on_language_change:
+            try:
+                self.on_language_change()
+            except Exception as e:
+                print(f"[Languages] reconnect request failed: {e}")
 
     def _apply_name_update(self, name: str, user_name: str, ui_color: str = "",
                            voice: str = ""):

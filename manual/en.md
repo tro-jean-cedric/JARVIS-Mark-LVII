@@ -189,6 +189,31 @@ Controls drawer switches between the face and the reactor-core look. How it
 speaks — tone, humour, answer length — is changed by simply telling it (see
 "Shaping its character").
 
+## Languages: which ones it listens to and speaks
+
+By default it is AUTOMATIC: it answers in whatever language the user speaks.
+The user can limit it to the languages they actually use — ⚙ Setup → CUSTOMISE
+ASSISTANT → LANGUAGES (tap languages on, APPLY), or by voice: "only speak
+French", "French and English only", "add Japanese", "remove Portuguese",
+"answer in any language again", "which languages are on?".
+
+- One language on: everything heard is taken as that language and every answer
+  is in it, even if a word sounds foreign.
+- Several on: each answer is in the active language the user just used;
+  anything that sounds like another language is treated as a mishearing. The
+  first language picked is used when it is unsure (greetings, briefings,
+  reminders).
+- If an answer still comes out in a language that is not on, it is said again
+  in an allowed one.
+- With your own engine (Whisper), recognition is locked to the one active
+  language, or to the most likely active one.
+
+27 languages are supported: English, French, Spanish, Portuguese, German,
+Italian, Dutch, Polish, Romanian, Turkish, Indonesian, Vietnamese, Russian,
+Ukrainian, Arabic, Hindi, Marathi, Bengali, Gujarati, Tamil, Telugu, Kannada,
+Malayalam, Thai, Japanese, Korean and Mandarin Chinese. Changing the languages
+restarts the voice session (a few seconds).
+
 ## The phone dashboard
 
 ⚙ Setup → REMOTE CONTROL shows a QR code. Scan it with a phone on the same

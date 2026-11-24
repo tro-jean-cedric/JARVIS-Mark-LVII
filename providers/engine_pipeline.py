@@ -37,8 +37,10 @@ THE DEADLOCK THIS FILE IS SHAPED AROUND
 NO LANGUAGE LOGIC ANYWHERE IN THIS FILE
     Not a keyword, not a greeting, not a locale check. What language the
     assistant speaks is decided by the system prompt and the model, exactly as
-    it is on Gemini. The STT is asked to detect rather than told what to expect,
-    and the transcript is passed through without being inspected.
+    it is on Gemini. The STT detects the language itself (kept inside the
+    user's ACTIVE languages by providers/stt_whisper.py and core/languages.py
+    when they have limited them), and the transcript is passed through without
+    being inspected here.
 """
 from __future__ import annotations
 

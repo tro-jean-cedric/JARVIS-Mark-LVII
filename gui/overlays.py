@@ -27,7 +27,7 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QGraphicsScene, QGraphicsView, QGraphicsPixmapItem,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar, QSlider,
@@ -286,7 +286,8 @@ class CustomizeOverlay(QWidget):
     """Floating overlay — change assistant name, user name, UI colour and voice."""
 
     saved = pyqtSignal(str, str, str, str)   # assistant_name, user_name, ui_color, voice
-    _OW, _OH = 400, 588
+    languages_saved = pyqtSignal(list)       # active language codes, [] = automatic
+    _OW, _OH = 400, 800
 
     def __init__(self, assistant_name="JARVIS", user_name="",
                  ui_color=DEFAULT_UI_COLOR, voice="", parent=None):
@@ -360,6 +361,58 @@ class CustomizeOverlay(QWidget):
             voice_row.addWidget(b)
         lay.addLayout(voice_row)
         self._refresh_voice_btns()
+
+        # ── Languages — which ones the assistant may hear and speak ─────────
+        # core/languages.py. None ticked = AUTOMATIC (any language, following
+        # the user). The first one ticked is used whenever it has to choose.
+        lay.addSpacing(4)
+        lay.addWidget(_lbl("LANGUAGES  —  it listens and answers only in these", 8,
+                            color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
+        try:
+            from core import languages as _langs
+            from memory.config_manager import get_active_languages
+            self._lang_table = [(c, nat) for c, _n, nat, _s in _langs.SUPPORTED]
+            self._sel_langs = [c for c in get_active_languages() if c in _langs.CODES]
+        except Exception:
+            self._lang_table, self._sel_langs = [], []
+        self._initial_langs = list(self._sel_langs)
+        self._lang_btns: dict[str, QPushButton] = {}
+
+        self._auto_btn = QPushButton("AUTOMATIC  (any language)")
+        self._auto_btn.setCheckable(True)
+        self._auto_btn.setFixedHeight(26)
+        self._auto_btn.setFont(hud_font(8, QFont.Weight.Bold))
+        self._auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._auto_btn.clicked.connect(self._on_lang_auto)
+        lay.addWidget(self._auto_btn)
+
+        grid_host = QWidget(); grid_host.setStyleSheet("background: transparent;")
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 4, 0); grid.setHorizontalSpacing(4); grid.setVerticalSpacing(4)
+        for i, (code, nat) in enumerate(self._lang_table):
+            b = QPushButton(nat)
+            b.setCheckable(True)
+            b.setFixedHeight(26)
+            b.setFont(hud_font(8))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(code)
+            b.clicked.connect(lambda _=False, c=code: self._on_lang_pick(c))
+            self._lang_btns[code] = b
+            grid.addWidget(b, i // 3, i % 3)
+        lang_scroll = QScrollArea()
+        lang_scroll.setWidgetResizable(True)
+        lang_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        lang_scroll.setFixedHeight(126)
+        lang_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        lang_scroll.setWidget(grid_host)
+        lay.addWidget(lang_scroll)
+
+        self._lang_note = QLabel("")
+        self._lang_note.setWordWrap(True)
+        self._lang_note.setFont(hud_font(8))
+        self._lang_note.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(self._lang_note)
+        self._refresh_lang_btns()
 
         # ── UI colour — colour wheel ─────────────────────────────────────────
         lay.addSpacing(4)
@@ -455,6 +508,42 @@ class CustomizeOverlay(QWidget):
                     QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
                 """)
 
+    # ── language selection ───────────────────────────────────────────────────
+    def _on_lang_auto(self):
+        self._sel_langs = []
+        self._refresh_lang_btns()
+
+    def _on_lang_pick(self, code: str):
+        if code in self._sel_langs:
+            self._sel_langs.remove(code)
+        else:
+            self._sel_langs.append(code)
+        self._refresh_lang_btns()
+
+    def _refresh_lang_btns(self):
+        on_css = (f"QPushButton {{ background: {C.PRI_GHO}; color: {C.PRI}; "
+                  f"border: 1px solid {C.PRI}; border-radius: 3px; }}")
+        off_css = (f"QPushButton {{ background: transparent; color: {C.TEXT_MED}; "
+                   f"border: 1px solid {C.BORDER}; border-radius: 3px; }}"
+                   f"QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}")
+        auto = not self._sel_langs
+        self._auto_btn.setChecked(auto)
+        self._auto_btn.setStyleSheet(on_css if auto else off_css)
+        for code, b in self._lang_btns.items():
+            on = code in self._sel_langs
+            b.setChecked(on)
+            b.setStyleSheet(on_css if on else off_css)
+        natives = dict(self._lang_table)
+        chosen = [natives.get(c, c) for c in self._sel_langs]
+        if not chosen:
+            note = "Automatic: it answers in whatever language you speak."
+        elif len(chosen) == 1:
+            note = f"Only {chosen[0]}: everything you say is heard as {chosen[0]}, and it always answers in {chosen[0]}."
+        else:
+            note = (f"Only {', '.join(chosen[:-1])} and {chosen[-1]}: it answers in the one you speak. "
+                    f"When unsure it uses {chosen[0]} (the first you picked).")
+        self._lang_note.setText(note)
+
     # ── colour flow ──────────────────────────────────────────────────────────
     def _set_color(self, hx: str, update_wheel: bool = True, preview: bool = True):
         """Updates the selected colour; hex box + wheel stay in sync, theme is live-previewed."""
@@ -497,6 +586,9 @@ class CustomizeOverlay(QWidget):
         name = self._name_input.text().strip() or "JARVIS"
         user = self._user_input.text().strip()
         self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
+        if self._sel_langs != self._initial_langs:
+            self.languages_saved.emit(list(self._sel_langs))
+            self._initial_langs = list(self._sel_langs)
         self.hide()
 
 
