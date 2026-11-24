@@ -55,12 +55,12 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | subscription_radar | Find paid subscriptions from Gmail receipts, monthly total | ✅ | Background scan (≤400 mails/12 months), model + rule fallback, per-currency monthly total, renewal reminders |
 | telegram_remote | Control the PC from the user's own Telegram bot; push screenshots/status | ⬜ | |
 | whatsapp_call | Place / end a WhatsApp (video) call to a contact | ⬜ | |
-| calorie_counter | Food on webcam → calories & macros | ⬜ | |
-| fridge_chef | Fridge photo → 3 dishes → step-by-step cooking with timers | ⬜ | |
-| paper_reminders | Paper/photo/PDF → reminders (bills, appointments, medicine) | ⬜ | |
-| build_guide | Look at parts/wiring/assembly via webcam and explain visually | ⬜ | |
-| document_review | Contract/terms → what you commit to, ranked points | ⬜ | |
-| video_summarizer | Any video/audio link or file → summary / Q&A / key points | ⬜ | |
+| calorie_counter | Food on webcam → calories & macros | ✅ | Webcam/photo/dropped file; daily log (today/undo/clear) |
+| fridge_chef | Fridge photo → 3 dishes → step-by-step cooking with timers | ✅ | look → cook → next/repeat/stop; spoken step timers |
+| paper_reminders | Paper/photo/PDF → reminders (bills, appointments, medicine) | ✅ | One-offs via `reminder`, repeating via routines engine; no duplicates. (No `help` action — any call reads a paper) |
+| build_guide | Look at parts/wiring/assembly via webcam and explain visually | 🟡 | PIL wiring diagram + photo marking, mistake check, refuses mains/gas wiring. No online datasheet lookup |
+| document_review | Contract/terms → what you commit to, ranked points | ✅ | `show_review` with severity-ordered findings |
+| video_summarizer | Any video/audio link or file → summary / Q&A / key points | 🟡 | YouTube transcript → yt-dlp captions → audio to model; local files via ffmpeg. "Video on screen" read from the address bar by the model |
 | posture_guard | Webcam posture watch + 20-20-20 eye breaks | ✅ | YuNet (auto-downloaded from opencv_zoo) or Haar fallback; calibrates 6 s; lean/slump/tilt with 1-min persistence + cooldowns |
 | pushup_counter | Count push-ups live via webcam, session history | ✅ | MediaPipe pose elbow angle if installed, else face-dip tracking with hysteresis |
 | face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | 🟡 | Enroll/lock/unlock(PIN)/forget work (SFace). **Mic gating + lock-at-start hook in main.py pending** (wave 2) |
@@ -113,4 +113,5 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 
 - 2026-11-24 — Inventory extracted; shared webcam helper `plugins/_camera.py` added.
 - 2026-11-24 — Shared `plugins/_announce.py` (speak later / plugin JSON storage in `memory/plugin_data/`).
+- 2026-11-24 — Fixed `.gitignore`: trailing comments had disabled the patterns for `config/api_keys.json`, `config/certs/`, `config/whatsapp_web/`, `**/token*.json`, `**/client_secret*.json`. Note: `config/certs/jarvis.key` is in git history (commit 067f528) — regenerate the dashboard certificate if the repo is public.
 - 2026-11-24 — Google plugins done; shared OAuth in `plugins/_google_core.py`, token in `config/token_google.json` (git-ignored).
