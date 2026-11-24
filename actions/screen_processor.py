@@ -253,8 +253,12 @@ def _detect_camera_index() -> int:
 
 def _get_camera_index() -> int:
     cfg = _load_config()
-    if "camera_index" in cfg:
-        return int(cfg["camera_index"])
+    # None is "Automatic" chosen in the device panel: probe again.
+    if cfg.get("camera_index") is not None:
+        try:
+            return int(cfg["camera_index"])
+        except (TypeError, ValueError):
+            pass
     return _detect_camera_index()
 
 

@@ -113,6 +113,71 @@ def subscribe(name: str) -> bool:
     return True
 
 
+def restart() -> bool:
+    """Reopen the shared stream on the camera chosen now (device panel APPLY).
+
+    Subscribers keep their subscription and simply get frames from the new
+    camera. Blocks up to ~2 s while the old capture lets go, so call it from a
+    worker thread. Returns True when a stream was running and was restarted."""
+    global _thread
+    with _lock:
+        old = _thread
+        if old is None or not old.is_alive() or not _subscribers:
+            return False
+        _stop.set()
+    old.join(timeout=2.0)
+    with _lock:
+        if not _subscribers:
+            return False
+        _stop.clear()
+        _thread = threading.Thread(target=_loop, name="shared-camera", daemon=True)
+        _thread.start()
+    print("[camera] shared stream restarted on the newly chosen camera")
+    return True
+
+
+def probe(index: int) -> tuple[bool, str]:
+    """Open camera `index` once and read a frame: (worked, sentence).
+
+    Used by the TEST button. When the shared stream is running on that same
+    camera its frame is used instead, since most cameras open only once."""
+    if not _CV2:
+        return False, "OpenCV is not installed, so no camera can be used."
+    try:
+        # Only the SAVED index and the backend: _camera_index_and_backend()
+        # would run the slow auto-detect (and save its answer) as a side effect.
+        from actions import screen_processor as sp
+        backend = int(sp._cv2_backend())
+        saved = sp._load_config().get("camera_index")
+        if subscribers() and saved is not None and int(saved) == index:
+            fr = wait_frame(timeout=2.0)
+            if fr is not None:
+                h, w = fr.shape[:2]
+                return True, f"Working — {w}×{h}, already in use by JARVIS."
+        cap = cv2.VideoCapture(index, backend) if backend else cv2.VideoCapture(index)
+        try:
+            if not cap.isOpened():
+                return False, ("This camera could not be opened. It may be in use by "
+                               "another app, or camera access is not allowed for "
+                               "this program in the system privacy settings.")
+            frame = None
+            for _ in range(8):           # first frames are often black/empty
+                ok, f = cap.read()
+                if ok and f is not None:
+                    frame = f
+            if frame is None:
+                return False, "The camera opened but sent no picture."
+            h, w = frame.shape[:2]
+            if float(frame.mean()) < 3.0:
+                return True, (f"Opened ({w}×{h}) but the picture is black — "
+                              "is a privacy shutter closed?")
+            return True, f"Working — {w}×{h}."
+        finally:
+            cap.release()
+    except Exception as e:
+        return False, f"The camera test failed: {e}"
+
+
 def unsubscribe(name: str) -> None:
     global _thread
     with _lock:

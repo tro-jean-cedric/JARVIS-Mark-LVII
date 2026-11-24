@@ -107,6 +107,8 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | Phone control safety (confirm risky steps on phone) | ✅ | Two-step Yes/No buttons on the phone for `core.confirm` requests from a phone turn |
 | Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | 🟡 | `actions/remote_mode.py` + `core/remote_mode.py`: keep awake, lock when idle, screen off, hibernate (confirm), WoL info/setup/send; phone `/awake`, `/hibernate`. No settings panel (voice/phone only); "lock when screen off" is idle-based; no smart-plug or sleep-then-self-wake flow |
 | Shared webcam for HUD preview + plugins | ✅ | `gui/window.py` camera preview now uses `plugins/_camera.py` |
+| Choose the camera by name, next to microphone and speakers (0.6.0) | ✅ | 🎧 AUDIO & CAMERA panel: WEBCAM row lists cameras by real name (Qt `QMediaDevices`) + Automatic; TEST opens it via OpenCV and reports size / black picture / no permission; name re-matched when indexes move; APPLY restarts the shared stream (`_camera.restart()`) without a reconnect |
+| "Search YouTube for…" searches on that site itself, any site named (0.5.1) | ✅ | `core/sitesearch.py` + `browser_control` `search` with `site`: table of ~35 well-known sites (country domains of Amazon/eBay/Wikipedia kept), else the site's OpenSearch description (cached), else a `site:` web search that the reply says is one |
 | Active languages (listen/answer only in chosen languages) | ✅ | Beyond Torvis's "stays in your language": `core/languages.py` — pick languages in Customise → LANGUAGES or by voice (`languages` tool); `[ACTIVE LANGUAGES]` rule last in the system prompt; spoken replies checked with py3langid and re-said in an allowed language (20 s cooldown); Whisper locked to the active set; greeting/briefing/recap/notices/summaries clamped |
 | Setup guides ("?" next to each plugin's setup) | ✅ | `core/setup_guides.py`: "❓ HOW TO SET UP" in ⚙ PLUGIN SETTINGS for the 12 account/device sections (steps + links), `setup_guide` voice tool, extra guides for Gemini key/quota and Wake-on-LAN, Telegram CHECK BOT button |
 | Subscription, plans, allowance, trial, signed auto-update, relay | ⛔ | Torvis commercial service |
@@ -121,11 +123,13 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 - 2026-11-24 — All 33 missing Torvis plugins and 6 missing actions added (productivity, Google, Telegram/cloud/WhatsApp, vision, webcam watchers, devices/web/screen agent, HUD panels).
 - 2026-11-24 — Wave 2: main.py hooks (face-lock mic gate, `on_app_ready` start-up), briefing by voice, weekly recap, suggestion chips + First steps, user plugins with hash approval, Remote Mode, shared HUD camera. AGENTS.md + manual updated for user plugins.
 
+- 2026-11-24 — Wave 3: camera choice by name (device panel) and on-site search (`core/sitesearch.py`). Module-name diff of the Torvis binary against JARVIS re-run; remaining Torvis-only modules are its commercial service (account, credits, trial, updater, relay, cloud memory), Linux packaging/bundling, the 10-language UI, and internals already covered under other names.
+
 ## Totals (2026-11-24)
 
 - Plugins: 34 added — 24 ✅, 10 🟡 (disk_map, build_guide, video_summarizer, holo_desk, whatsapp_call, cloud_agent, shop_assistant, connected_apps, planet_watch, live_subtitles); 4 already in JARVIS.
 - Actions: 6 added — 5 ✅, 1 🟡 (window_control) — plus the new `remote_mode` action.
-- App-level: 6 ✅, 2 🟡, 1 ➖ (Moments), 3 ⛔ (Torvis's own commercial services / feedback channel / 10-language UI).
+- App-level: 8 ✅, 2 🟡, 1 ➖ (Moments), 3 ⛔ (Torvis's own commercial services / feedback channel / 10-language UI).
 - Nothing in JARVIS is gated by a licence, plan, allowance or trial.
 
 ## Not verified on real hardware/accounts (needs a person)

@@ -408,6 +408,29 @@ def save_output_device(name: str) -> None:
     _patch_config(output_device=(name or "").strip())
 
 
+def get_camera() -> tuple[str, int | None]:
+    """The webcam the user picked: (name, OpenCV index).
+
+    ('', None) means Automatic — screen_processor probes indexes 0-5 and keeps
+    the first that delivers a frame. The name is kept beside the index because
+    indexes move when a camera is plugged in or out; the GUI re-matches the
+    name against the current device list and corrects the index."""
+    cfg = load_api_keys()
+    name = (cfg.get("camera_name", "") or "").strip()
+    idx = cfg.get("camera_index")
+    try:
+        idx = int(idx) if idx is not None else None
+    except (TypeError, ValueError):
+        idx = None
+    return name, idx
+
+
+def save_camera(name: str, index: int | None) -> None:
+    """Save the chosen webcam; name '' with index None goes back to Automatic."""
+    _patch_config(camera_name=(name or "").strip(),
+                  camera_index=None if index is None else int(index))
+
+
 def get_plugin_enabled(plugin_name: str, default: bool = True) -> bool:
     """Plugins are enabled by default the moment they're discovered (opt-out model).
     User-added plugins (user_plugins/) pass default=False: they start OFF."""

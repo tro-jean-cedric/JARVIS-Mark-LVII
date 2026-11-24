@@ -1228,6 +1228,17 @@ def browser_control(
     # user had opened it themselves. A controlled window with about:blank never
     # opens here. The only exception: if an automation flow is already running,
     # navigation continues in that window (so multi-step tasks aren't split).
+    # "search YouTube for X" → the site's own results page, any site named.
+    site_note = ""
+    if action == "search" and (params.get("site") or "").strip():
+        from core import sitesearch
+        site_url, how = sitesearch.resolve(params["site"], params.get("query", ""))
+        params = {**params, "action": "go_to", "url": site_url}
+        action = "go_to"
+        if how != "site":
+            site_note = (f" Note: {params['site']} has no search page that could "
+                         f"be found, so this is a web search limited to that site.")
+
     if action in ("go_to", "search", "new_tab"):
         if _registry.has(browser):
             sess = _registry.get(browser)
@@ -1243,6 +1254,7 @@ def browser_control(
                 result = f"Browser action '{action}' timed out (60s)."
             except Exception as e:
                 result = f"Browser error ({action}): {e}"
+            result += site_note
             _log(player, result)
             return result
 
@@ -1260,6 +1272,7 @@ def browser_control(
         # resuming the page the user is actually looking at.
         if nav_url and not result.startswith(f"status={outcome.FAILED} "):
             _registry.note_native_url(_normalize_url(nav_url))
+        result += site_note
         _log(player, result)
         return result
 
@@ -1350,7 +1363,7 @@ TOOL = {
         "guessing a path produces an error page that looks like a working one. "
         "When the exact address is not known: open the site's own address "
         "(youtube.com, instagram.com) and get to the rest with smart_click on "
-        "what the page shows, or use action='search', or ask the user. A "
+        "what the page shows, or use action='search' (with 'site' to search on that site itself), or ask the user. A "
         "guessed path is never acceptable. "
         "TO CLICK OR TYPE ON A PAGE, PREFER action='smart_click' or "
         "action='smart_type' with a 'description' of what the thing SAYS on "
@@ -1396,6 +1409,10 @@ TOOL = {
             "engine": {
                 "type": "STRING",
                 "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"
+            },
+            "site": {
+                "type": "STRING",
+                "description": "For action='search': search ON this site instead of a search engine - its name or address as the user said it (youtube, amazon.fr, wikipedia, github, any shop or site). 'Search YouTube for lo-fi' = action 'search', site 'youtube', query 'lo-fi'. Opens the site's own results page."
             },
             "selector": {
                 "type": "STRING",

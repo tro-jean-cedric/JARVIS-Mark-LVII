@@ -1191,7 +1191,7 @@ class AudioDeviceOverlay(_HudOverlay):
         lay.setContentsMargins(20, 16, 20, 16)
         lay.setSpacing(6)
 
-        hdr = QLabel("🎧  AUDIO DEVICES")
+        hdr = QLabel("🎧  AUDIO & CAMERA")
         hdr.setFont(hud_font(12, QFont.Weight.Bold))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         lay.addWidget(hdr)
@@ -1355,6 +1355,10 @@ class AudioDeviceOverlay(_HudOverlay):
             self._out_box.currentIndexChanged.connect(
                 lambda _i: self._volume_follows_device())
 
+        # ── Camera, by name, next to the microphone and speakers ─────────────
+        self._cam_box = None
+        self._build_camera_row(lay, _combo_css, _test_css)
+
         note = QLabel("Applying reconnects the session. Your conversation is kept.")
         note.setWordWrap(True)
         note.setFont(hud_font(7))
@@ -1387,6 +1391,120 @@ class AudioDeviceOverlay(_HudOverlay):
         cancel.clicked.connect(self.hide)
         row.addWidget(cancel)
         lay.addLayout(row)
+
+    def _build_camera_row(self, lay, combo_css: str, test_css: str) -> None:
+        """WEBCAM row: every camera by its real name, plus Automatic.
+
+        Names come from Qt's QMediaDevices (we are on the Qt thread here). The
+        position in that list is used as the OpenCV index — both enumerate the
+        same OS list (AVFoundation / Media Foundation-DirectShow / V4L2) in the
+        same order on the systems tested. That is an assumption, so TEST opens
+        the camera through OpenCV for real before anyone relies on it."""
+        try:
+            from PyQt6.QtMultimedia import QMediaDevices
+            cams = [d.description() for d in QMediaDevices.videoInputs()]
+        except Exception as e:
+            print(f"[Camera] the camera list is unavailable: {e}")
+            return
+        from memory.config_manager import get_camera, save_camera
+        saved_name, saved_idx = get_camera()
+
+        # Cameras move when one is plugged in or out: follow the saved NAME.
+        if saved_name and saved_name in cams and cams.index(saved_name) != saved_idx:
+            new_idx = cams.index(saved_name)
+            print(f"[Camera] '{saved_name}' moved to index {new_idx}; updated")
+            save_camera(saved_name, new_idx)
+            saved_idx = new_idx
+
+        cap = QLabel("WEBCAM — what JARVIS sees you with")
+        cap.setFont(hud_font(8))
+        cap.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addSpacing(4)
+        lay.addWidget(cap)
+
+        box = QComboBox()
+        box.setFont(hud_font(9))
+        box.setFixedHeight(30)
+        box.setStyleSheet(combo_css)
+        box.addItem("Automatic (first camera that works)", None)
+        for i, name in enumerate(cams):
+            box.addItem(name, i)
+        if saved_name:
+            pos = box.findText(saved_name)
+            if pos < 0:
+                box.addItem(f"{saved_name}  (not connected)", saved_idx)
+                pos = box.count() - 1
+            box.setCurrentIndex(pos)
+        else:
+            box.setCurrentIndex(0)
+        if not cams:
+            box.setToolTip("No camera found. On macOS, allow camera access for "
+                           "the terminal/Python in System Settings → Privacy.")
+
+        row = QHBoxLayout(); row.setSpacing(6)
+        row.addWidget(box, 1)
+        test = QPushButton("TEST")
+        test.setFixedSize(64, 30)
+        test.setFont(hud_font(8, QFont.Weight.Bold))
+        test.setCursor(Qt.CursorShape.PointingHandCursor)
+        test.setStyleSheet(test_css)
+        row.addWidget(test)
+        lay.addLayout(row)
+
+        result = QLabel("" if cams else "No camera found.")
+        result.setWordWrap(True)
+        result.setFont(hud_font(7))
+        result.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(result)
+
+        test.clicked.connect(lambda _=False: self._run_camera_test(box, test, result))
+        self._cam_box = box
+        self._cam_initial = (saved_name, saved_idx)
+
+    def _run_camera_test(self, box, button, label):
+        import threading
+        idx = box.currentData()
+        if idx is None:
+            from memory.config_manager import get_camera
+            idx = get_camera()[1]
+            if idx is None:
+                idx = 0
+        self._active = (button, label, None)
+        button.setEnabled(False)
+        label.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        label.setText("Opening the camera…")
+
+        def _work():
+            try:
+                from plugins import _camera
+                ok, text = _camera.probe(int(idx))
+            except Exception as e:
+                ok, text = False, f"The test itself failed: {e}"
+            self._test_result.emit(text, ok)
+
+        threading.Thread(target=_work, daemon=True, name="camera-test").start()
+
+    def _apply_camera(self) -> None:
+        """Save the webcam choice; restart the shared stream if it changed."""
+        if self._cam_box is None:
+            return
+        from memory.config_manager import save_camera
+        idx = self._cam_box.currentData()
+        name = "" if idx is None else self._cam_box.currentText().replace(
+            "  (not connected)", "")
+        if (name, idx) == getattr(self, "_cam_initial", None):
+            return
+        save_camera(name, idx)
+
+        def _work():
+            try:
+                from plugins import _camera
+                _camera.restart()
+            except Exception as e:
+                print(f"[Camera] could not switch the running stream: {e}")
+
+        import threading
+        threading.Thread(target=_work, daemon=True, name="camera-switch").start()
 
     def _apply_volume(self):
         """Set the system output volume from the slider, off the Qt thread.
@@ -1497,6 +1615,10 @@ class AudioDeviceOverlay(_HudOverlay):
         changed = (new_in != get_input_device()) or (new_out != get_output_device())
         save_input_device(new_in)
         save_output_device(new_out)
+        try:
+            self._apply_camera()      # a camera change needs no reconnect
+        except Exception as e:
+            print(f"[Camera] saving the camera choice failed: {e}")
         self.hide()
         # Only rebuild the session if something actually moved — a no-op Apply
         # should not cost a reconnect.
