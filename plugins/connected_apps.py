@@ -686,6 +686,13 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
         command = str(p.get("command") or "").strip()
         if not app_name:
             return "What should I call this app?"
+        if (re.fullmatch(r"\s*\d{6,12}:[A-Za-z0-9_-]{30,}\s*", str(p.get("token") or ""))
+                or "telegram" in app_name.lower()) and not url and not command:
+            # A @BotFather token is not an MCP server: it belongs to the
+            # Telegram remote plugin, entered where it is stored as a password.
+            return ("That is a Telegram bot token, not an app to connect here. Telegram is set up "
+                    "in Settings > TELEGRAM REMOTE: paste the token into 'Bot token', press CHECK "
+                    "BOT, then follow the pairing step. Nothing was saved here.")
         if not url and not command:
             return (f"To connect {app_name} I need its MCP server address (a URL), or the command "
                     "that starts it on this computer. Many services list their MCP address in "

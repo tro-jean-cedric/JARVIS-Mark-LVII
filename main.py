@@ -407,7 +407,23 @@ def _is_repeat_chunk(txt: str, buf: list) -> bool:
     joined = " ".join(buf)
     return txt in joined
 
-def _clean_transcript(text: str) -> str:    
+_SECRET_RES = [
+    re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"),          # Telegram bot token
+    re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),                # Google API key
+    re.compile(r"\b(?:sk|pk|rk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}\b"),
+]
+
+
+def _redact(text) -> str:
+    """For console lines only: what the user typed or a tool was given can be a
+    key pasted to set something up, and a log is no place for it."""
+    s = str(text)
+    for rx in _SECRET_RES:
+        s = rx.sub("[REDACTED]", s)
+    return s
+
+
+def _clean_transcript(text: str) -> str:
     text = _CTRL_RE.sub("", text)
     text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
     return text.strip()
@@ -1384,7 +1400,7 @@ class JarvisLive:
             return
         self._last_user_input_at = time.monotonic()   # real input (see shutdown_jarvis)
         self._last_user_text = f"(typed) {text[:200]}"
-        print(f"[JARVIS] ⌨ You: {text[:300]}")
+        print(_redact(f"[JARVIS] ⌨ You: {text[:300]}"))
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -1754,7 +1770,7 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        print(_redact(f"[JARVIS] 🔧 {name}  {args}"))
         _t_tool = time.monotonic()
 
         # The startup briefing is spoken on the user's behalf, before they have
@@ -1970,7 +1986,7 @@ class JarvisLive:
         # either this number or the model's own time before and after it — and
         # without it the two look identical from the outside.
         print(f"[JARVIS] 📤 {name} ({(time.monotonic() - _t_tool) * 1000:.0f} ms) "
-              f"→ {str(result)[:80]}")
+              f"→ {_redact(str(result)[:80])}")
 
         # The assistant's own week-long record of what it did (tool, a short
         # purpose from harmless parameters, outcome — never content). Written on
@@ -2274,7 +2290,7 @@ class JarvisLive:
                                 # Also on the console: tool calls are printed
                                 # there, and without the words that led to
                                 # them a wrong call cannot be diagnosed.
-                                print(f"[JARVIS] 🗣 You: {full_in[:300]}")
+                                print(_redact(f"[JARVIS] 🗣 You: {full_in[:300]}"))
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
                                 if self._dashboard:
@@ -2294,7 +2310,7 @@ class JarvisLive:
                                     full_out = ""
                             if full_out:
                                 self._last_out_logged = full_out
-                                print(f"[JARVIS] 💬 {self._asst_name}: {full_out[:300]}")
+                                print(_redact(f"[JARVIS] 💬 {self._asst_name}: {full_out[:300]}"))
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
                                 if self._dashboard:
