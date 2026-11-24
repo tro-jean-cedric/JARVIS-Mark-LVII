@@ -1195,7 +1195,7 @@ class MacDesktop(Transport):
             m = re.search(r",\s*‎(\d+)\s", raw)     # "Ali, ‎3 unread messages"
             if not m:
                 continue
-            preview = _ax_clean(str(self._attr(n, "AXValue") or "").replace("‎", ""))
+            preview = " ".join(_ax_clean(self._attr(n, "AXValue")).split())
             out.append((self._row_name(n), int(m.group(1)), preview[:220]))
         return True, "", out
 
