@@ -1136,7 +1136,13 @@ class MacDesktop(Transport):
             return False, str(e)
         title = self._title(win)
         if not title:
-            return False, "no conversation is open — click any normal chat and press CHECK again"
+            # Sending opens the chat itself through New Chat, so an empty
+            # right-hand pane is not a problem — only a missing New Chat is.
+            if self._find(win, "NavigationBar_NewChatButton") is None:
+                return False, ("WhatsApp is open but its chat list is not showing — go back to "
+                               "Chats and try again")
+            return True, ("WhatsApp found and ready: messages and calls open the right chat by "
+                          "themselves")
         if self._find(win, "ChatBar_ComposerTextView") is None:
             return False, f"'{title}' is open but its message box could not be found"
         ids = {i for _, i, _ in self._header_buttons(win)}
