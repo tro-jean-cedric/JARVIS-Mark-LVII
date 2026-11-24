@@ -66,12 +66,12 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | ✅ | SFace enroll/lock/unlock(PIN)/forget; main.py mic callback is gated while locked; lock-at-start via `on_startup` |
 | gesture_control | Webcam hand gestures: stop talking, tracks, volume, yes/no | ✅ | Full set with `pip install mediapipe`; without it only swipe + open palm |
 | holo_desk | Full-screen camera view with hand-controlled floating panels | 🟡 | Camera picture + Pillow-drawn panels on the HUD, swipe/palm control. No full-screen window, pinch-drag needs mediapipe; big-HUD hook pending (wave 2) |
-| home_assistant | Tuya / Smart Life light: on/off, colour, brightness, scenes | ⬜ | |
-| printer_control | 3D printer over LAN (status, pause, temps, fans, light) | ⬜ | |
-| shop_assistant | Find real prices/stock/delivery across shops, add to cart (never buy) | ⬜ | |
-| connected_apps | Work inside connected services (Notion, GitHub…) via MCP | ⬜ | |
-| screen_agent | Mouse/keyboard task agent driven by the screen | ⬜ | |
-| planet_watch | Globe/map with earthquakes, disasters, aurora, aircraft | ⬜ | |
+| home_assistant | Tuya / Smart Life light: on/off, colour, brightness, scenes | ✅ | Local (tinytuya) **or** your own Tuya cloud project; ~20 moods. Untested on a real bulb |
+| printer_control | 3D printer over LAN (status, pause, temps, fans, light) | ✅ | Bambu (MQTT/TLS), OctoPrint, Moonraker; stop behind confirm; progress announcements. Camera = snapshot, not live stream. Untested on a real printer |
+| shop_assistant | Find real prices/stock/delivery across shops, add to cart (never buy) | 🟡 | Search → page extraction (JSON-LD/meta/text) → model check; baskets; Playwright add-to-cart that blocks checkout/pay. Missing: variant choice, comparison-site follow-through, price tracking |
+| connected_apps | Work inside connected services (Notion, GitHub…) via MCP | 🟡 | Remote (streamable HTTP) and local (stdio) MCP servers, Claude-Desktop `mcpServers` config; changes behind confirm. Missing: OAuth sign-in (use a token or mcp-remote) |
+| screen_agent | Mouse/keyboard task agent driven by the screen | ✅ | look → decide → act loop on screenview/screenact; verifies each step; risky/paying steps confirmed. Live clicking untested by design |
+| planet_watch | Globe/map with earthquakes, disasters, aurora, aircraft | 🟡 | USGS+EMSC quakes, GDACS+EONET disasters, NOAA aurora, OpenSky/adsb.lol aircraft, OSM-tile maps, quake watch. No interactive 3-D globe, ISS/satellites |
 | visual_panel | Show tables, charts, big numbers, checklists, countdowns on the HUD | ✅ | PIL board in the HUD palette: text/stats/list/table/bars/line/pie/progress/checklist/countdown/image/gallery. Ticking a checklist is by voice (it's a picture) |
 | live_panels | Live interactive panels (system diagnostics, weather board) | ✅ | System (psutil, 3 s refresh) and weather (Open-Meteo, no key) |
 | live_subtitles | Live translated subtitles of computer audio in an overlay bar | 🟡 | New `gui/subtitles.py` bar + `player.show_subtitle`. Needs a loopback device (WASAPI/Stereo Mix, Pulse monitor, BlackHole on macOS); capture untested |
