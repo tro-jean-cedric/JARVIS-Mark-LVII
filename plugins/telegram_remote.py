@@ -670,6 +670,9 @@ def _help_text(cfg: dict) -> str:
         lines.append("/get [name] — list or fetch a file from the shared folder")
     if _on(cfg, "accept_files"):
         lines.append("Send a file or photo — it is saved on the computer")
+    if _on(cfg, "phone_control"):
+        lines += ["/awake [on|off] — keep the computer from sleeping (Remote Mode)",
+                  "/hibernate — turn the computer off completely (asks you first)"]
     lines += ["/confirm — is anything waiting for a confirmation?", "/undo — take back the last change",
               "/id — this chat's number", "/stop — close the bridge (restart it at the computer)"]
     return "\n".join(lines)
@@ -696,6 +699,19 @@ def _command(chat, text: str, cfg: dict) -> None:
         threading.Thread(target=_phone_status, args=(chat,), daemon=True).start()
     elif cmd == "/get":
         threading.Thread(target=_phone_get, args=(chat, arg, cfg), daemon=True).start()
+    elif cmd == "/awake":
+        # Remote Mode (core/remote_mode.py): keep the computer from sleeping.
+        if not _on(cfg, "phone_control"):
+            _enqueue(chat, "Controlling the computer from the phone is switched off at the computer.")
+        else:
+            threading.Thread(target=_phone_awake, args=(chat, arg), daemon=True).start()
+    elif cmd == "/hibernate":
+        # Goes through the assistant so core.confirm asks Yes/No here first.
+        if not _on(cfg, "phone_control"):
+            _enqueue(chat, "Controlling the computer from the phone is switched off at the computer.")
+        else:
+            _forward(chat, "Turn this computer off completely (remote_mode action hibernate).",
+                     voice=False, cfg=cfg)
     elif cmd == "/confirm":
         title = ops.pending_confirmation() if ops else ""
         _enqueue(chat, f"Waiting for a confirmation: {title}" if title
@@ -712,6 +728,22 @@ def _command(chat, text: str, cfg: dict) -> None:
                 _enqueue(chat, str(e))
     else:
         _forward(chat, text, voice=False, cfg=cfg)
+
+
+def _phone_awake(chat, arg: str) -> None:
+    try:
+        from core import remote_mode as rm
+        word = arg.strip().lower()
+        if word in ("on", "off"):
+            ok, msg = rm.keep_awake(word == "on")
+            if ok:
+                rm.save_settings(keep_awake=word == "on")
+            _enqueue(chat, msg)
+        else:
+            _enqueue(chat, rm.status_text() + "\n/awake on · /awake off")
+        _step("remote mode via phone")
+    except Exception as e:
+        _enqueue(chat, f"Remote Mode failed: {e}")
 
 
 def _need_ops(chat) -> bool:

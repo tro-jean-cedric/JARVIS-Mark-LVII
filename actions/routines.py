@@ -28,6 +28,9 @@ def _row(eng, r: dict) -> str:
         nxt = " · next " + datetime.fromtimestamp(r["next_ts"]).strftime("%Y-%m-%d %H:%M")
     what = r["builtin"] if r["kind"] == "builtin" else r["kind"]
     text = f" · \"{r['text'][:70]}\"" if r.get("text") else ""
+    if r.get("builtin") == "briefing":
+        from core import briefing
+        text += f" · says: {briefing.describe(r.get('options'))}"
     return (f"{r['id']} [{'on' if r['enabled'] else 'off'}] {r['name']} ({what}) · "
             f"{eng.describe(r)}{nxt}{text}")
 
@@ -83,9 +86,19 @@ def routines(parameters: dict, player=None) -> str:
             if trigger:
                 fields["trigger"] = trigger
             options = {}
-            for key in ("news_topic", "extra", "news"):
+            for key in ("news_topic", "extra", "news", "news_region", "language", "city"):
                 if a.get(key) is not None:
                     options[key] = a[key]
+            # The briefing's parts: set the whole list, or add/remove some.
+            # (news true/false, the older switch, adds/removes the news part.)
+            if any(a.get(k) is not None for k in ("parts", "add_parts", "remove_parts", "news")):
+                from core import briefing
+                cur = eng.get(rid) or {}
+                add = list(a.get("add_parts") or []) + (["news"] if a.get("news") is True else [])
+                drop = list(a.get("remove_parts") or []) + (["news"] if a.get("news") is False else [])
+                options["parts"] = briefing.edit_parts(
+                    briefing.normalize(cur.get("options"))["parts"],
+                    set_parts=a.get("parts"), add=add, remove=drop)
             if a.get("focuses"):
                 options["focuses"] = [str(f) for f in a["focuses"] if str(f).strip()]
             if options:
@@ -98,8 +111,12 @@ def routines(parameters: dict, player=None) -> str:
                     desktop.mirror_brief_switch(r["enabled"])
                 except Exception as e:
                     print(f"[Routines] MORNING BRIEF setting not updated: {e}")
+            extra = {}
+            if r.get("builtin") == "briefing":
+                from core import briefing
+                extra["briefing"] = briefing.describe(r.get("options"))
             return outcome.done("routines", id=r["id"], name=r["name"], enabled=r["enabled"],
-                                when=eng.describe(r), changed=",".join(fields))
+                                when=eng.describe(r), changed=",".join(fields), **extra)
 
         if action == "remove":
             return (outcome.done("routines", removed=rid) if eng.remove(rid)
@@ -124,9 +141,14 @@ TOOL = {
         "HH:MM' (once) | time 'HH:MM' + optional days (numbers 1=Mon…7=Sun; weekdays = [1,2,3,4,5]) | "
         "monthly_day 1-31 + time | every_minutes + optional between 'HH:MM-HH:MM' | on 'startup' | "
         "on 'idle' + idle_minutes. "
-        "The built-in routines are builtin 'briefing' (the opening briefing: news_topic, extra, "
-        "news true/false), 'checkin' (unprompted check-ins: focuses = what they may be about) and "
-        "'news_watch' (the watched topics' headlines). list = all routines with ids; update = change "
+        "The built-in routines are builtin 'briefing' (the opening/morning briefing. What it says: "
+        "parts = the full ordered list, or add_parts / remove_parts, from weather, calendar, "
+        "reminders, email, news, focus; language = the language to speak it in; news_topic; "
+        "news_region = a country for the news; city = for the weather; extra = anything else to "
+        "add. Its time: time 'HH:MM' (+ days) makes it a morning briefing at that time, on "
+        "'startup' makes it greet at launch), 'checkin' (unprompted check-ins: focuses = what they may be about) and "
+        "'news_watch' (the watched topics' headlines) and 'weekly_recap' (once a week: what you "
+        "did for the user, and one feature they have not tried; default Sunday 18:00). list = all routines with ids; update = change "
         "one by id or builtin (enabled, when, text, and the options above); remove = delete by id; "
         "run_now = do it now; quiet_hours = 'HH:MM-HH:MM' when unprompted routines stay silent "
         "(empty turns it off). For a one-off reminder at a date and time, the reminder tool also "
@@ -139,7 +161,8 @@ TOOL = {
             "action": {"type": "STRING",
                        "enum": ["add", "list", "update", "remove", "run_now", "quiet_hours"]},
             "id": {"type": "STRING"},
-            "builtin": {"type": "STRING", "enum": ["briefing", "checkin", "news_watch"]},
+            "builtin": {"type": "STRING", "enum": ["briefing", "checkin", "news_watch",
+                                                   "weekly_recap"]},
             "name": {"type": "STRING"},
             "kind": {"type": "STRING", "enum": ["say", "prompt", "task"]},
             "text": {"type": "STRING"},
@@ -158,6 +181,15 @@ TOOL = {
             "agent": {"type": "STRING"},
             "minutes": {"type": "INTEGER"},
             "news_topic": {"type": "STRING"},
+            "news_region": {"type": "STRING"},
+            "language": {"type": "STRING"},
+            "city": {"type": "STRING"},
+            "parts": {"type": "ARRAY", "items": {"type": "STRING", "enum": [
+                "weather", "calendar", "reminders", "email", "news", "focus"]}},
+            "add_parts": {"type": "ARRAY", "items": {"type": "STRING", "enum": [
+                "weather", "calendar", "reminders", "email", "news", "focus"]}},
+            "remove_parts": {"type": "ARRAY", "items": {"type": "STRING", "enum": [
+                "weather", "calendar", "reminders", "email", "news", "focus"]}},
             "news": {"type": "BOOLEAN"},
             "extra": {"type": "STRING"},
             "focuses": {"type": "ARRAY", "items": {"type": "STRING"}},

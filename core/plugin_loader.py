@@ -69,6 +69,12 @@ class PluginRecord:
     #          is in force. Nothing is deleted: Gemini still gets the full text.
     tier: Optional[str] = None
     brief: Optional[str] = None
+    # True for a file from user_plugins/ (added by the user, not shipped).
+    # `review` = refused until the user approves it again (unapproved or
+    # changed since approval); `stem` names the file for that approval.
+    user: bool = False
+    review: bool = False
+    stem: str = ""
 
 
 class PluginRegistry:
@@ -82,12 +88,53 @@ class PluginRegistry:
         # the user has to know about are sent to it. Defaults to dropping them,
         # which keeps every existing single-sink caller working unchanged.
         self._notify = notify or (lambda _msg: None)
+        self._user_names: set[str] = set()     # plugins loaded from user_plugins/
+        self._core_names: set[str] = set()
+        self._plugins_dir: Optional[Path] = None
+
+    def _enabled(self, name: str) -> bool:
+        # A user-added plugin starts OFF; bundled ones keep the opt-out default.
+        return get_plugin_enabled(name, name not in self._user_names)
+
+    # -- called by the Plugin Manager after a user plugin was added/approved/removed --
+    def refresh_user_plugin(self, stem: str) -> tuple[bool, str]:
+        """Bring this running registry in line with user_plugins/<stem>.py:
+        import it when it is approved and unchanged, list it for REVIEW when
+        not, drop it when the file is gone. Never raises."""
+        try:
+            for n, r in list(self._plugins.items()):
+                if r.user and r.stem == stem:
+                    del self._plugins[n]
+                    self._user_names.discard(n)
+            self._all_records = [r for r in self._all_records
+                                 if not (r.user and r.stem == stem)]
+            path = USER_PLUGINS_DIR / f"{stem}.py"
+            if not path.is_file():
+                return True, f"{stem} is no longer installed."
+            problem = check_user_plugin(stem)
+            if problem:
+                rec = PluginRecord(name=_record_name(stem), file=path.name, user=True,
+                                   review=True, stem=stem, error=problem)
+            else:
+                _extend_package_path()
+                rec = _load_file(path, self._plugins_dir or BUNDLED_PLUGINS_DIR,
+                                 self._core_names, self._plugins, user=True)
+            self._all_records.append(rec)
+            if rec.valid:
+                self._plugins[rec.name] = rec
+                self._user_names.add(rec.name)
+                return True, (f"'{rec.name}' is installed and switched OFF. Turn it on "
+                              f"here; the assistant picks it up on its next session.")
+            return False, rec.error
+        except Exception as e:
+            traceback.print_exc()
+            return False, f"Could not load it: {e}"
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
         decls = []
         for name, rec in self._plugins.items():
-            if get_plugin_enabled(name):
+            if self._enabled(name):
                 decl = {
                     "name": rec.name,
                     "description": rec.description,
@@ -118,7 +165,7 @@ class PluginRegistry:
         rec = self._plugins.get(name)
         if rec is None or not rec.valid:
             return f"Plugin '{name}' is not available."
-        if not get_plugin_enabled(name):
+        if not self._enabled(name):
             return f"The '{name}' plugin is currently disabled."
         try:
             return _call_run(rec.run, parameters, player, session_memory) or "Done."
@@ -138,7 +185,7 @@ class PluginRegistry:
         seen: set[str] = set()
         out: list[dict] = []
         for name, rec in self._plugins.items():
-            if not rec.settings or not get_plugin_enabled(name):
+            if not rec.settings or not self._enabled(name):
                 continue
             ns = rec.settings.get("namespace") or rec.name
             if ns in seen:
@@ -164,7 +211,10 @@ class PluginRegistry:
                 "file": rec.file,
                 "valid": rec.valid,
                 "error": rec.error,
-                "enabled": get_plugin_enabled(rec.name) if rec.valid else False,
+                "enabled": self._enabled(rec.name) if rec.valid else False,
+                "user": rec.user,          # added by the user (user_plugins/)
+                "review": rec.review,      # refused until approved again
+                "stem": rec.stem or Path(rec.file).stem,
             })
         return out
 
@@ -285,6 +335,41 @@ def _load_error(path: Path, plugins_dir: Path, exc: Exception) -> str:
     return f"Failed to load: {exc}"
 
 
+def _load_file(path: Path, plugins_dir: Path, core_tool_names: set[str],
+               valid: dict[str, PluginRecord], user: bool = False) -> PluginRecord:
+    """Import one plugin file and validate it. Never raises."""
+    try:
+        module_name = f"plugins.{path.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError("could not build import spec")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+        rec = _validate(module, path.name)
+
+        if rec.valid and rec.name in core_tool_names:
+            rec = PluginRecord(name=rec.name, file=path.name,
+                                error=f"Name '{rec.name}' collides with a core tool — rejected.")
+        elif rec.valid and rec.name in valid:
+            other = valid[rec.name].file
+            rec = PluginRecord(name=rec.name, file=path.name,
+                                error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
+
+    except Exception as e:
+        rec = PluginRecord(name=path.stem, file=path.name,
+                            error=_load_error(path, plugins_dir, e))
+        traceback.print_exc()
+    rec.user = user
+    rec.stem = path.stem
+    return rec
+
+
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
                       logger: Callable[[str], None] = print,
                       notify: Callable[[str], None] | None = None) -> PluginRegistry:
@@ -294,43 +379,23 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
     Import errors, validation errors, and name collisions are logged and the offending
     file is skipped — they NEVER raise out of this function and never abort the scan
     of remaining files.
+
+    Then scans user_plugins/ (plugins the user added through the Plugin
+    Manager). Those load only when the file — and every helper it came with —
+    still has the SHA-256 recorded when the user approved it; otherwise they are
+    listed with "REVIEW" and never imported. Bundled plugins win name clashes
+    because they are scanned first.
     """
     plugins_dir.mkdir(parents=True, exist_ok=True)
     valid: dict[str, PluginRecord] = {}
     all_records: list[PluginRecord] = []
+    user_names: set[str] = set()
 
     files = sorted(plugins_dir.glob("*.py"), key=lambda p: p.name)  # deterministic order
     for path in files:
         if path.name.startswith("_"):
             continue
-        try:
-            module_name = f"plugins.{path.stem}"
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            if spec is None or spec.loader is None:
-                raise ImportError("could not build import spec")
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            try:
-                spec.loader.exec_module(module)
-            except Exception:
-                sys.modules.pop(module_name, None)
-                raise
-
-            rec = _validate(module, path.name)
-
-            if rec.valid and rec.name in core_tool_names:
-                rec = PluginRecord(name=rec.name, file=path.name,
-                                    error=f"Name '{rec.name}' collides with a core tool — rejected.")
-            elif rec.valid and rec.name in valid:
-                other = valid[rec.name].file
-                rec = PluginRecord(name=rec.name, file=path.name,
-                                    error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
-
-        except Exception as e:
-            rec = PluginRecord(name=path.stem, file=path.name,
-                                error=_load_error(path, plugins_dir, e))
-            traceback.print_exc()
-
+        rec = _load_file(path, plugins_dir, core_tool_names, valid)
         all_records.append(rec)
         if rec.valid:
             valid[rec.name] = rec
@@ -338,9 +403,42 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
         else:
             logger(f"Plugin rejected: {path.name} — {rec.error}")
 
+    # ── user-added plugins ──
+    if USER_PLUGINS_DIR.is_dir():
+        _extend_package_path()
+        bundled_stems = {p.stem for p in files}
+        for path in sorted(USER_PLUGINS_DIR.glob("*.py"), key=lambda p: p.name):
+            if path.name.startswith("_"):
+                continue
+            if path.stem in bundled_stems:
+                rec = PluginRecord(name=path.stem, file=path.name, user=True, stem=path.stem,
+                                   error=f"File name '{path.name}' is already used by a "
+                                         f"bundled plugin — rename it and add it again.")
+            else:
+                problem = check_user_plugin(path.stem)
+                if problem:
+                    rec = PluginRecord(name=_record_name(path.stem), file=path.name,
+                                       user=True, review=True, stem=path.stem, error=problem)
+                else:
+                    rec = _load_file(path, plugins_dir, core_tool_names, valid, user=True)
+            all_records.append(rec)
+            if rec.valid:
+                valid[rec.name] = rec
+                user_names.add(rec.name)
+                logger(f"User plugin loaded: {rec.name} ({path.name})")
+            else:
+                logger(f"User plugin refused: {path.name} — {rec.error}")
+        stray = _unapproved_helpers()
+        if stray:
+            logger("Helper files in user_plugins/ that no approved plugin brought: "
+                   + ", ".join(stray))
+
     notify = notify or (lambda _msg: None)
     registry = PluginRegistry(valid, logger, notify)
     registry._all_records = all_records
+    registry._user_names = user_names
+    registry._core_names = set(core_tool_names)
+    registry._plugins_dir = plugins_dir
     rejected = len(all_records) - len(valid)
     logger(f"Plugin discovery complete: {len(valid)} active, "
            f"{rejected} rejected, {len(all_records)} total.")
@@ -349,4 +447,291 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
     # — and then as one line, because the per-plugin detail is on the console.
     if rejected:
         notify(f"{rejected} plugin(s) could not be loaded — see the console.")
+    review = [r.file for r in all_records if r.review]
+    if review:
+        notify(f"Plugin(s) waiting for your review in the Plugin Manager: {', '.join(review)}")
     return registry
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# User-added plugins
+#
+# The bundled plugins/ folder keeps its drop-in model: a file there is part of
+# the app. A plugin the USER adds goes through the Plugin Manager instead: the
+# file (and the _helper.py files it imports) is copied into user_plugins/
+# (git-ignored), the user is told plainly that it will run with their
+# permissions, and approving records each file's SHA-256 in the settings. The
+# plugin starts OFF. If any of those files changes afterwards, it is not
+# imported again until the user reviews and approves it once more.
+# ═════════════════════════════════════════════════════════════════════════════
+import ast as _ast
+import hashlib as _hashlib
+import shutil as _shutil
+import time as _time
+
+from memory.config_manager import BASE_DIR as _BASE_DIR
+
+USER_PLUGINS_DIR = _BASE_DIR / "user_plugins"
+BUNDLED_PLUGINS_DIR = _BASE_DIR / "plugins"
+_MAX_PLUGIN_BYTES = 2_000_000
+
+
+def _extend_package_path() -> None:
+    """Let `from plugins import _helper` find helpers living in user_plugins/.
+    Appended AFTER the bundled folder, so a bundled helper always wins."""
+    try:
+        import plugins as _pkg
+        p = str(USER_PLUGINS_DIR)
+        if p not in list(_pkg.__path__):
+            _pkg.__path__.append(p)
+    except Exception as e:
+        print(f"[Plugins] could not add user_plugins to the package path: {e}")
+
+
+def sha256_file(path: Path) -> str:
+    h = _hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _records() -> dict:
+    try:
+        from memory.config_manager import get_user_plugin_records
+        return get_user_plugin_records()
+    except Exception:
+        return {}
+
+
+def _record_name(stem: str) -> str:
+    return str(_records().get(stem, {}).get("name") or stem)
+
+
+def check_user_plugin(stem: str) -> str:
+    """'' when user_plugins/<stem>.py and its helpers match what was approved,
+    otherwise a sentence saying why it is refused."""
+    rec = _records().get(stem)
+    path = USER_PLUGINS_DIR / f"{stem}.py"
+    if not rec or not rec.get("sha256"):
+        return "Not approved yet — REVIEW it in the Plugin Manager before it can run."
+    try:
+        if sha256_file(path) != rec["sha256"]:
+            return "Changed since you added it — REVIEW before it can run again."
+        for helper, digest in dict(rec.get("helpers") or {}).items():
+            hp = USER_PLUGINS_DIR / helper
+            if not hp.is_file():
+                return f"Its helper file {helper} is missing — add the plugin again."
+            if sha256_file(hp) != digest:
+                return f"Its helper {helper} changed since you added it — REVIEW before it can run again."
+    except OSError as e:
+        return f"Could not read it: {e}"
+    return ""
+
+
+def _unapproved_helpers() -> list[str]:
+    known: set[str] = set()
+    for rec in _records().values():
+        known.update(dict(rec.get("helpers") or {}).keys())
+    try:
+        return sorted(p.name for p in USER_PLUGINS_DIR.glob("_*.py") if p.name not in known)
+    except OSError:
+        return []
+
+
+def _static_meta(tree) -> dict:
+    """PLUGIN's literal 'name' / 'description', read WITHOUT running the file."""
+    for node in getattr(tree, "body", []):
+        if isinstance(node, _ast.Assign) and any(
+                isinstance(t, _ast.Name) and t.id == "PLUGIN" for t in node.targets):
+            if isinstance(node.value, _ast.Dict):
+                out = {}
+                for k, v in zip(node.value.keys, node.value.values):
+                    if isinstance(k, _ast.Constant) and k.value in ("name", "description"):
+                        try:
+                            out[k.value] = str(_ast.literal_eval(v))
+                        except Exception:
+                            pass
+                return out
+    return {}
+
+
+def _helper_imports(tree) -> set[str]:
+    """Names of plugins._helper modules a file imports (any import form)."""
+    out: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ImportFrom):
+            mod = node.module or ""
+            if mod == "plugins":
+                out.update(a.name for a in node.names if a.name.startswith("_"))
+            elif mod.startswith("plugins._"):
+                out.add(mod.split(".")[1])
+        elif isinstance(node, _ast.Import):
+            for a in node.names:
+                if a.name.startswith("plugins._"):
+                    out.add(a.name.split(".")[1])
+    out.discard("__init__")
+    return out
+
+
+def _parse(path: Path):
+    if path.stat().st_size > _MAX_PLUGIN_BYTES:
+        raise ValueError(f"{path.name} is larger than 2 MB — not a plugin file.")
+    return _ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+
+
+def inspect_user_plugin(src) -> dict:
+    """Look at a file the user picked, WITHOUT running it.
+
+    Returns {ok, error, stem, name, description, file, helpers (to copy),
+    bundled_helpers (already in the app), missing (helpers not found),
+    sha256, update (a plugin with this file name was added before)}."""
+    out = {"ok": False, "error": "", "stem": "", "name": "", "description": "",
+           "file": "", "helpers": [], "bundled_helpers": [], "missing": [],
+           "sha256": "", "update": False}
+    try:
+        src = Path(str(src)).expanduser().resolve()
+        out["file"] = str(src)
+        stem = src.stem
+        out["stem"] = stem
+        if src.suffix.lower() != ".py" or not src.is_file():
+            out["error"] = "Pick a plugin's .py file."
+            return out
+        if stem.startswith("_"):
+            out["error"] = ("Files starting with '_' are helpers, not plugins — pick the "
+                            "plugin file itself; its helpers come along automatically.")
+            return out
+        if not _NAME_RE.match(stem):
+            out["error"] = "The file name must be letters, digits and underscores only."
+            return out
+        if (BUNDLED_PLUGINS_DIR / f"{stem}.py").exists():
+            out["error"] = (f"{src.name} has the same file name as a plugin that comes with "
+                            f"the app. Rename the file and try again.")
+            return out
+        tree = _parse(src)
+        meta = _static_meta(tree)
+        out["name"] = meta.get("name") or stem
+        out["description"] = meta.get("description") or ""
+        if not meta:
+            out["error"] = "This file has no PLUGIN = {...} declaration, so it is not a plugin."
+            return out
+        # Helpers it imports, followed through helpers that import helpers.
+        todo, seen = list(_helper_imports(tree)), set()
+        while todo:
+            h = todo.pop()
+            if h in seen:
+                continue
+            seen.add(h)
+            if (BUNDLED_PLUGINS_DIR / f"{h}.py").exists():
+                out["bundled_helpers"].append(f"{h}.py")
+                continue
+            hp = src.parent / f"{h}.py"
+            if hp.is_file():
+                out["helpers"].append(f"{h}.py")
+                todo.extend(_helper_imports(_parse(hp)))
+            else:
+                out["missing"].append(f"{h}.py")
+        out["helpers"].sort(); out["missing"].sort(); out["bundled_helpers"].sort()
+        out["sha256"] = sha256_file(src)
+        out["update"] = stem in _records() or (USER_PLUGINS_DIR / src.name).exists()
+        out["ok"] = True
+    except SyntaxError as e:
+        out["error"] = f"The file has a Python syntax error (line {e.lineno}) — it cannot run."
+    except Exception as e:
+        out["error"] = f"Could not read the file: {e}"
+    return out
+
+
+def install_user_plugin(src) -> tuple[bool, str, str]:
+    """Copy an approved plugin (and its helpers) into user_plugins/, record the
+    SHA-256 of every file, and switch it OFF. Call only after the user saw the
+    warning and approved. Returns (ok, message, stem)."""
+    info = inspect_user_plugin(src)
+    if not info["ok"]:
+        return False, info["error"], info["stem"]
+    try:
+        srcp = Path(info["file"])
+        USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_ignored()
+        records = _records()
+        # A helper of the same name that another added plugin brought and that
+        # differs would silently change that plugin — refuse instead.
+        for h in info["helpers"]:
+            dst = USER_PLUGINS_DIR / h
+            if dst.exists() and sha256_file(dst) != sha256_file(srcp.parent / h):
+                owners = [s for s, r in records.items()
+                          if h in dict(r.get("helpers") or {}) and s != info["stem"]]
+                if owners:
+                    return False, (f"A different {h} is already installed for "
+                                   f"'{owners[0]}'. Rename the helper or remove that "
+                                   f"plugin first."), info["stem"]
+        copies = [(srcp, USER_PLUGINS_DIR / srcp.name)] + \
+                 [(srcp.parent / h, USER_PLUGINS_DIR / h) for h in info["helpers"]]
+        for a, b in copies:
+            if a.resolve() != b.resolve():
+                _shutil.copy2(a, b)
+        record = {
+            "name": info["name"],
+            "sha256": sha256_file(USER_PLUGINS_DIR / srcp.name),
+            "helpers": {h: sha256_file(USER_PLUGINS_DIR / h) for h in info["helpers"]},
+            "added": int(_time.time()),
+        }
+        if record["sha256"] != info["sha256"]:
+            return False, "The file changed while it was being copied — try again.", info["stem"]
+        from memory.config_manager import save_plugin_enabled, save_user_plugin_record
+        save_user_plugin_record(info["stem"], record)
+        save_plugin_enabled(info["name"], False)       # starts OFF
+        _extend_package_path()
+        msg = f"'{info['name']}' was added and is switched OFF."
+        if info["missing"]:
+            msg += f" It also needs {', '.join(info['missing'])}, which was not next to it."
+        return True, msg, info["stem"]
+    except Exception as e:
+        traceback.print_exc()
+        return False, f"Could not add it: {e}", info["stem"]
+
+
+def approve_user_plugin(stem: str) -> tuple[bool, str]:
+    """Re-approve a plugin already in user_plugins/ after the user reviewed it
+    (it changed, or was put there by hand). Starts it OFF again."""
+    path = USER_PLUGINS_DIR / f"{stem}.py"
+    if not path.is_file():
+        return False, f"{stem}.py is not in the user plugins folder."
+    ok, msg, _ = install_user_plugin(path)
+    return ok, msg
+
+
+def remove_user_plugin(stem: str) -> tuple[bool, str]:
+    """Delete a user-added plugin and forget its approval. Helpers another
+    added plugin still uses are kept."""
+    try:
+        records = _records()
+        rec = records.get(stem, {})
+        still_used: set[str] = set()
+        for s, r in records.items():
+            if s != stem:
+                still_used.update(dict(r.get("helpers") or {}).keys())
+        path = USER_PLUGINS_DIR / f"{stem}.py"
+        if path.is_file():
+            path.unlink()
+        for h in dict(rec.get("helpers") or {}):
+            hp = USER_PLUGINS_DIR / h
+            if h not in still_used and hp.is_file():
+                hp.unlink()
+        from memory.config_manager import save_user_plugin_record
+        save_user_plugin_record(stem, None)
+        sys.modules.pop(f"plugins.{stem}", None)
+        return True, f"{stem} was removed. Restart to unload it completely."
+    except Exception as e:
+        return False, f"Could not remove it: {e}"
+
+
+def _ensure_ignored() -> None:
+    """user_plugins/ holds the user's own files — keep them out of git."""
+    try:
+        gi = USER_PLUGINS_DIR / ".gitignore"
+        if not gi.exists():
+            gi.write_text("# Plugins you added yourself — never part of the repository.\n*\n",
+                          encoding="utf-8")
+    except OSError:
+        pass

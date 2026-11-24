@@ -148,8 +148,60 @@ def _record(name: str, args: dict, result: str, duration_ms: float) -> None:
             entries = [e for e in _read() if isinstance(e, dict) and e.get("t", 0) >= cutoff]
             entries.append(entry)
             _write(entries[-_MAX_ENTRIES:])
+            _count_use(entry)
     except Exception as e:
         print(f"[ActionHistory] not recorded: {e}")
+
+
+# ── Which tools were ever used (no dates beyond first/last, no content) ──────
+# The week-long record forgets; "have you ever tried X?" — for the First steps
+# checklist and the weekly recap's "something you have not tried yet" — must
+# not. One small counter per tool name, in memory/plugin_data/tools_used.json.
+def _used_path() -> Path:
+    return _path().with_name("tools_used.json")
+
+
+def tools_used() -> dict:
+    """{tool: {"n": calls, "ok": successful calls, "first": t, "last": t, "last_ok": t}}."""
+    try:
+        data = json.loads(_used_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"[ActionHistory] tools_used unreadable ({e})")
+        return {}
+
+
+def _count_use(entry: dict) -> None:
+    """Called with _lock held."""
+    try:
+        data = tools_used()
+        rec = data.get(entry["tool"]) if isinstance(data.get(entry["tool"]), dict) else {}
+        rec["n"] = int(rec.get("n", 0)) + 1
+        rec.setdefault("first", entry["t"])
+        rec["last"] = entry["t"]
+        if entry.get("outcome") == "done":
+            rec["ok"] = int(rec.get("ok", 0)) + 1
+            rec["last_ok"] = entry["t"]
+        data[entry["tool"]] = rec
+        p = _used_path()
+        tmp = p.with_suffix(".tmp2")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(p)
+    except Exception as e:
+        print(f"[ActionHistory] tools_used not updated: {e}")
+
+
+def entries_since(seconds: float) -> list[dict]:
+    """Raw entries of the last `seconds` (for the weekly recap). Never raises."""
+    try:
+        with _lock:
+            entries = _read()
+        since = time.time() - seconds
+        return [e for e in entries if isinstance(e, dict) and e.get("t", 0) >= since]
+    except Exception:
+        return []
 
 
 def _line(e: dict, with_date: bool = True) -> str:
@@ -190,6 +242,10 @@ def action_history(parameters: dict) -> str:
         try:
             with _lock:
                 _write([])
+                try:
+                    _used_path().unlink()
+                except FileNotFoundError:
+                    pass
             return "Your record of past actions has been erased."
         except Exception as e:
             return f"The record could not be erased: {e}"

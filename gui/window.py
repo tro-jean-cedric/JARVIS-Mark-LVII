@@ -76,6 +76,7 @@ from gui.overlays import (
     ClipboardPanel,
     ConfirmBanner,
     CustomizeOverlay,
+    FirstStepsOverlay,
     MemoryOverlay,
     PluginManagerOverlay,
     PluginSettingsOverlay,
@@ -103,6 +104,10 @@ class MainWindow(QMainWindow):
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
+    # Large-HUD frames from a plugin (holo_desk draws its panels over the camera
+    # picture and pushes the result here). Same surface as the live camera.
+    _hud_frame_sig  = pyqtSignal(bytes)
+    _hud_frame_stop_sig = pyqtSignal()
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _image_open_sig  = pyqtSignal(str, str)   # still picture on the HUD: path, title
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
@@ -120,6 +125,7 @@ class MainWindow(QMainWindow):
     # Live subtitles (plugins/live_subtitles.py): a line of text + a short hint
     # (the language), and hiding the bar. See gui/subtitles.py.
     _subtitle_sig      = pyqtSignal(str, str)
+    _chips_sig         = pyqtSignal(object)   # "Things to say" suggestions (list[str])
     _subtitle_hide_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
@@ -154,6 +160,8 @@ class MainWindow(QMainWindow):
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by JarvisLive
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas, set by JarvisLive
+        self.on_user_plugin_changed = None  # callable: (stem) -> (ok, msg) — registry refresh after + ADD PLUGIN
+        self.get_suggestions   = None   # callable: () -> list[str] — "Things to say" chips (core/suggest.py)
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by JarvisLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
         self.on_push_to_talk   = None   # callable: (enable: bool) -> str scope
@@ -362,7 +370,21 @@ class MainWindow(QMainWindow):
             QSplitter::handle {{ background: transparent; }}
             QSplitter::handle:hover {{ background: {C.PRI_GHO}; }}
         """)
-        self._center_split.addWidget(self._hud_cam_stack)
+        # "Things to say": suggestion chips under the head (core/suggest.py).
+        # The HUD stack and the chip row share the splitter's first pane.
+        self._chips_row = QWidget()
+        self._chips_row.setStyleSheet("background: transparent;")
+        self._chips_lay = QHBoxLayout(self._chips_row)
+        self._chips_lay.setContentsMargins(6, 2, 6, 4)
+        self._chips_lay.setSpacing(6)
+        self._chips_row.hide()
+        _hud_wrap = QWidget()
+        _hud_wrap_lay = QVBoxLayout(_hud_wrap)
+        _hud_wrap_lay.setContentsMargins(0, 0, 0, 0)
+        _hud_wrap_lay.setSpacing(0)
+        _hud_wrap_lay.addWidget(self._hud_cam_stack, stretch=1)
+        _hud_wrap_lay.addWidget(self._chips_row, stretch=0)
+        self._center_split.addWidget(_hud_wrap)
         self._center_split.addWidget(self._content_panel)
         self._center_split.addWidget(self._quiz_panel)
         self._center_split.setStretchFactor(0, 3)
@@ -407,6 +429,8 @@ class MainWindow(QMainWindow):
         self._confirm_hide_sig.connect(self._hide_confirm_banner)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
+        self._hud_frame_sig.connect(self._on_hud_frame)
+        self._hud_frame_stop_sig.connect(self._on_hud_frame_stop)
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
         self._image_open_sig.connect(self._on_image_open)
@@ -420,9 +444,18 @@ class MainWindow(QMainWindow):
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
         self._subtitle_sig.connect(self._show_subtitle)
+        self._chips_sig.connect(self._on_chips)
+        # Chips are rebuilt now and then (time of day, new routines, things
+        # tried); the first run also offers the First steps checklist.
+        self._chips_tmr = QTimer(self)
+        self._chips_tmr.timeout.connect(self._refresh_chips)
+        self._chips_tmr.start(10 * 60 * 1000)
+        QTimer.singleShot(4000, self._refresh_chips)
+        QTimer.singleShot(9000, self._maybe_first_steps)
         self._subtitle_hide_sig.connect(self._hide_subtitles)
         self._subtitle_bar = None            # created on first use
         self._cam_stop = threading.Event()
+        self._cam_thread: threading.Thread | None = None
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
@@ -476,44 +509,68 @@ class MainWindow(QMainWindow):
                               Qt.TransformationMode.SmoothTransformation)
                 )
 
+    # Large-HUD frames pushed by a plugin (holo_desk). Qt thread only.
+    def _on_hud_frame(self, data: bytes) -> None:
+        if self._hud_cam_stack.currentIndex() != 1:
+            self._hud_cam_stack.setCurrentIndex(1)
+        self._on_cam_frame(data)
+
+    def _on_hud_frame_stop(self) -> None:
+        # Give the HUD back to the avatar unless the live camera preview is
+        # still running on the same surface.
+        t = self._cam_thread
+        if t is not None and t.is_alive() and not self._cam_stop.is_set():
+            return
+        if self._hud_cam_stack.currentIndex() == 1:
+            self._on_cam_stream(False)
+
     def start_camera_stream(self) -> None:
         self._cam_stop.clear()
         self._cam_stream_sig.emit(True)
+        t = self._cam_thread
+        if t is not None and t.is_alive():
+            return                      # already streaming
         t = threading.Thread(target=self._cam_loop, daemon=True, name="cam-stream")
+        self._cam_thread = t
         t.start()
 
     def _cam_loop(self) -> None:
+        # Reads the ONE shared webcam stream (plugins/_camera.py) instead of
+        # opening a second VideoCapture, so this preview and the webcam plugins
+        # (posture_guard, gesture_control, holo_desk...) can run together.
+        name = "hud-preview"
+        cam = None
         try:
-            import cv2
-            # Reuse camera index detected by screen_processor (cached in api_keys.json)
-            cam_idx = 0
-            try:
-                import json as _j
-                cfg = _j.loads((CONFIG_DIR / "api_keys.json").read_text())
-                cam_idx = int(cfg.get("camera_index", 0))
-            except Exception:
-                pass
-            try:
-                backend = cv2.CAP_DSHOW if _OS == "Windows" else cv2.CAP_ANY
-            except AttributeError:
-                backend = 0
-            cap = cv2.VideoCapture(cam_idx, backend)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
+            from plugins import _camera as cam
+            if not cam.subscribe(name):
+                print("[Camera] Stream error: OpenCV is not installed")
                 return
-            # warm-up frames
-            for _ in range(5):
-                cap.read()
-            while not self._cam_stop.wait(0.033) and cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
-                    self._cam_frame_sig.emit(buf.tobytes())
-            cap.release()
+            if cam.wait_frame(6.0) is None:
+                print(f"[Camera] Stream error: {cam.last_error() or 'no picture from the webcam'}")
+                return
+            last = None
+            stale_since = time.time()
+            while not self._cam_stop.wait(0.033):
+                frame = cam.latest(1.0)
+                if frame is None:
+                    # The shared stream died (unplugged, error) - give up after a while.
+                    if cam.last_error() or time.time() - stale_since > 5.0:
+                        print(f"[Camera] Stream error: {cam.last_error() or 'the webcam stopped'}")
+                        break
+                    continue
+                stale_since = time.time()
+                if frame is last:
+                    continue                # no new picture since the last tick
+                last = frame
+                self._cam_frame_sig.emit(cam.encode_jpeg(frame, 1280, 65))
         except Exception as e:
             print(f"[Camera] Stream error: {e}")
         finally:
+            if cam is not None:
+                try:
+                    cam.unsubscribe(name)
+                except Exception:
+                    pass
             self._cam_stream_sig.emit(False)
 
     def stop_camera_stream(self) -> None:
@@ -1682,6 +1739,7 @@ class MainWindow(QMainWindow):
         _btn("🎧  AUDIO DEVICES", self._open_audio_devices)
         _btn("🧠  MEMORY", self._open_memory_panel)
         _btn("🧩  PLUGINS", self._open_plugin_manager)
+        _btn("✓  FIRST STEPS", self._open_first_steps)
         _btn("⚙  PLUGIN SETTINGS", self._open_plugin_settings)
         # The button is built here with the rest of the drawer; the panel behind
         # it — and the whole providers package — is imported on the click. The
@@ -2842,19 +2900,113 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log.append_log(f"ERR: Confirmation failed — {e}")
 
-    def _open_plugin_manager(self):
+    def _open_plugin_manager(self, notice=""):
+        # `notice` is a status line after adding/reviewing/removing a user
+        # plugin (clicked(bool) passes a bool here, hence the check).
+        notice = notice if isinstance(notice, str) else ""
+        old = getattr(self, "_plugin_manager_overlay", None)
+        if old is not None:
+            old.hide()
+            old.deleteLater()
         plugins = self.get_plugins() if self.get_plugins else []
         cw = self.centralWidget()
-        ov = PluginManagerOverlay(plugins, parent=cw)
+        ov = PluginManagerOverlay(plugins, parent=cw,
+                                  on_changed=self.on_user_plugin_changed,
+                                  reopen=self._open_plugin_manager, notice=notice)
         ov.adjustSize()
+        oh = min(ov.height(), cw.height() - 16)
         ov.setGeometry(
             (cw.width()  - ov.width())  // 2,
-            (cw.height() - ov.height()) // 2,
-            ov.width(), ov.height(),
+            max(8, (cw.height() - oh) // 2),
+            ov.width(), oh,
         )
         ov.show()
         ov.raise_()
         self._plugin_manager_overlay = ov   # keep a reference so it isn't GC'd
+
+    # ── "Things to say" chips and First steps ───────────────────────────────
+
+    def _send_text(self, text: str) -> None:
+        """Send `text` exactly as if the user had typed it."""
+        text = str(text or "").strip()
+        if not text:
+            return
+        self._log.append_log(f"You: {text}")
+        if self.on_text_command:
+            threading.Thread(target=self.on_text_command, args=(text,), daemon=True).start()
+
+    def _refresh_chips(self) -> None:
+        fn = self.get_suggestions
+        if not callable(fn):
+            return
+
+        def work():
+            try:
+                self._chips_sig.emit(list(fn() or []))
+            except Exception as e:
+                print(f"[Suggest] {e}")
+        threading.Thread(target=work, daemon=True, name="suggestions").start()
+
+    def _on_chips(self, phrases) -> None:
+        while self._chips_lay.count():
+            item = self._chips_lay.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        phrases = [str(p) for p in (phrases or []) if str(p).strip()][:4]
+        if not phrases:
+            self._chips_row.hide()
+            return
+        self._chips_lay.addStretch(1)
+        for p in phrases:
+            b = QPushButton(p)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFont(px_font(11))
+            b.setToolTip("Click to say this")
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {C.PANEL}; color: {C.TEXT_MED};
+                               border: 1px solid {C.BORDER}; border-radius: 11px;
+                               padding: 3px 12px; }}
+                QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
+            """)
+            b.clicked.connect(lambda _, t=p: self._chip_clicked(t))
+            self._chips_lay.addWidget(b)
+        self._chips_lay.addStretch(1)
+        self._chips_row.show()
+
+    def _chip_clicked(self, text: str) -> None:
+        self._send_text(text)
+        QTimer.singleShot(8000, self._refresh_chips)
+
+    def _open_first_steps(self, *_a) -> None:
+        old = getattr(self, "_first_steps_overlay", None)
+        if old is not None:
+            old.hide()
+            old.deleteLater()
+        cw = self.centralWidget()
+        try:
+            ov = FirstStepsOverlay(send=self._send_text, parent=cw)
+        except Exception as e:
+            self._log.append_log(f"ERR: First steps unavailable — {e}")
+            return
+        ov.adjustSize()
+        oh = min(ov.height(), cw.height() - 16)
+        ov.setGeometry((cw.width() - ov.width()) // 2, max(8, (cw.height() - oh) // 2),
+                       ov.width(), oh)
+        ov.show()
+        ov.raise_()
+        self._first_steps_overlay = ov
+
+    def _maybe_first_steps(self) -> None:
+        """First run only: offer the checklist once the window is set up."""
+        if not self._ready:
+            QTimer.singleShot(15000, self._maybe_first_steps)
+            return
+        try:
+            from core import first_steps
+            if first_steps.should_offer():
+                self._open_first_steps()
+        except Exception as e:
+            print(f"[first steps] {e}")
 
     def _open_plugin_settings(self):
         sections = self.get_plugin_settings() if self.get_plugin_settings else []

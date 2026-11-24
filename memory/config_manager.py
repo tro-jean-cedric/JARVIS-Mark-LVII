@@ -388,9 +388,36 @@ def save_output_device(name: str) -> None:
     _patch_config(output_device=(name or "").strip())
 
 
-def get_plugin_enabled(plugin_name: str) -> bool:
-    """Plugins are enabled by default the moment they're discovered (opt-out model)."""
-    return load_api_keys().get("plugins_enabled", {}).get(plugin_name, True)
+def get_plugin_enabled(plugin_name: str, default: bool = True) -> bool:
+    """Plugins are enabled by default the moment they're discovered (opt-out model).
+    User-added plugins (user_plugins/) pass default=False: they start OFF."""
+    return load_api_keys().get("plugins_enabled", {}).get(plugin_name, default)
+
+
+# ── User-added plugins: what the user approved ───────────────────────────────
+# One record per file stem in user_plugins/: {"name", "sha256", "helpers":
+# {"_x.py": sha256}, "added": epoch}. The loader refuses a file whose hash no
+# longer matches, so a plugin cannot change behind the user's back.
+def get_user_plugin_records() -> dict:
+    val = load_api_keys().get("user_plugins")
+    return {k: dict(v) for k, v in val.items() if isinstance(v, dict)} \
+        if isinstance(val, dict) else {}
+
+
+@_locked
+def save_user_plugin_record(stem: str, record: dict | None) -> None:
+    """Store (or with record=None, forget) the approval of one user plugin."""
+    ensure_config_dir()
+    data = _read_for_write()
+    cur = data.get("user_plugins")
+    if not isinstance(cur, dict):
+        cur = {}
+    if record is None:
+        cur.pop(stem, None)
+    else:
+        cur[stem] = dict(record)
+    data["user_plugins"] = cur
+    _write_config(data)
 
 
 # ── Per-plugin settings ("tokens" / connection details) ───────────────────────

@@ -8,6 +8,7 @@ Mark LVII, so nobody loses a morning briefing to an upgrade:
     opening      the startup briefing — on if the MORNING BRIEF switch was on
     check-in     the proactive check-in after 15 quiet minutes, at most every 20
     news-watch   the topic watch, every 30 minutes
+    weekly recap what the assistant did this week, Sundays 18:00 (seed_extras)
 
 They stay routines from then on: switch them off, move the briefing to 08:30,
 change its news topic or the check-in's subjects, by voice or from the panel.
@@ -57,6 +58,16 @@ def seed_defaults(engine, brief_enabled: bool) -> None:
     engine.mark_seeded()
 
 
+def seed_extras(engine) -> None:
+    """Built-ins added after the first seeding — created once, on any install.
+    (Built-ins cannot be deleted, only switched off, so 'absent' means 'new'.)"""
+    if engine.find_builtin("weekly_recap") is None:
+        engine.add(name="Weekly recap", kind="builtin", builtin="weekly_recap",
+                   trigger={"type": "time", "rule": {"type": "weekly", "time": "18:00",
+                                                     "days": [7]}},
+                   system=True, quiet=True)
+
+
 def attach(host, log=print):
     """Start the routine engine for this app. Returns it."""
     global _engine
@@ -70,6 +81,10 @@ def attach(host, log=print):
             except Exception:
                 brief = True
             seed_defaults(eng, brief)
+            try:
+                seed_extras(eng)
+            except Exception as e:
+                log(f"[Routines] weekly recap not added: {e}")
             eng.start()
             _engine = eng
         else:

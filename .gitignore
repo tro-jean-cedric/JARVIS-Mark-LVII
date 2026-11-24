@@ -60,3 +60,6 @@ screenshots/
 
 # ── Plugin data (shopping list, flashcards, history...) ─────────────────────
 memory/plugin_data/
+
+# ── Plugins the user added through the Plugin Manager (their own files) ─────
+user_plugins/

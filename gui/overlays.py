@@ -501,12 +501,25 @@ class CustomizeOverlay(QWidget):
 
 
 class PluginManagerOverlay(QWidget):
-    """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles."""
+    """Floating overlay — lists discovered plugins with per-plugin ON/OFF toggles.
 
-    _OW = 420
+    Also the way in for plugins the USER adds (+ ADD PLUGIN): the file is
+    inspected without being run, a warning says plainly that it will run with
+    the user's permissions, and only after APPROVE is it copied into
+    user_plugins/ with its SHA-256 recorded (core/plugin_loader.py). It starts
+    OFF. A user plugin that changed afterwards shows REVIEW instead of ON/OFF.
 
-    def __init__(self, plugins: list[dict], parent=None):
+    `on_changed(stem) -> (ok, msg)` lets the running registry pick the change
+    up at once; `reopen(notice)` rebuilds this overlay with a status line."""
+
+    _OW = 460
+
+    def __init__(self, plugins: list[dict], parent=None, on_changed=None,
+                 reopen=None, notice: str = ""):
         super().__init__(parent)
+        self._on_changed = on_changed
+        self._reopen = reopen
+        self._warn: QFrame | None = None
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             PluginManagerOverlay {{
@@ -529,16 +542,53 @@ class PluginManagerOverlay(QWidget):
         sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
         lay.addWidget(sep)
 
+        if notice:
+            note = QLabel(notice)
+            note.setWordWrap(True)
+            note.setFont(hud_font(8))
+            note.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+            lay.addWidget(note)
+
         if not plugins:
             empty = QLabel("No plugins found in /plugins.")
             empty.setFont(hud_font(8))
             empty.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
             lay.addWidget(empty)
 
+        # Rows scroll, so a long list never pushes the buttons off screen.
+        rows = QWidget()
+        rows.setStyleSheet("background: transparent;")
+        rows_lay = QVBoxLayout(rows)
+        rows_lay.setContentsMargins(0, 0, 4, 0)
+        rows_lay.setSpacing(6)
         for p in plugins:
-            lay.addLayout(self._build_row(p))
+            rows_lay.addLayout(self._build_row(p))
+        scroll = QScrollArea()
+        scroll.setWidget(rows)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        scroll.setFixedHeight(min(380, max(40, 30 * len(plugins))))
+        lay.addWidget(scroll)
+        self._lay = lay
 
         lay.addSpacing(4)
+        add_btn = QPushButton("+  ADD PLUGIN")
+        add_btn.setFixedHeight(30)
+        add_btn.setFont(hud_font(9, QFont.Weight.Bold))
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setToolTip("Add a plugin file you downloaded or wrote. "
+                           "You review it first; it starts OFF.")
+        add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.PRI};
+                border: 1px solid {C.BORDER_B}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ color: {C.WHITE}; border-color: {C.PRI}; }}
+        """)
+        add_btn.clicked.connect(self._pick_file)
+        lay.addWidget(add_btn)
         close_btn = QPushButton("CLOSE")
         close_btn.setFixedHeight(30)
         close_btn.setFont(hud_font(9))
@@ -558,6 +608,8 @@ class PluginManagerOverlay(QWidget):
         row = QHBoxLayout(); row.setSpacing(6)
 
         label_text = p["name"] if p["valid"] else f"{p['name']}  (⚠ {p['file']})"
+        if p.get("user"):
+            label_text += "  · added by you"
         lbl = QLabel(label_text)
         lbl.setFont(hud_font(8))
         lbl.setStyleSheet(f"color: {C.TEXT if p['valid'] else C.TEXT_DIM}; background: transparent;")
@@ -565,10 +617,37 @@ class PluginManagerOverlay(QWidget):
         lbl.setWordWrap(False)
         row.addWidget(lbl, stretch=1)
 
+        if p.get("user"):
+            rm = QPushButton("✕")
+            rm.setFixedSize(24, 24)
+            rm.setFont(hud_font(8))
+            rm.setCursor(Qt.CursorShape.PointingHandCursor)
+            rm.setToolTip("Remove this plugin you added")
+            rm.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                               border: 1px solid {C.BORDER}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.RED}; border-color: {C.RED}; }}
+            """)
+            rm.clicked.connect(lambda _, s=p.get("stem", ""): self._remove(s))
+            row.addWidget(rm)
+
         btn = QPushButton()
         btn.setFixedSize(72, 24)
         btn.setFont(hud_font(7, QFont.Weight.Bold))
-        if not p["valid"]:
+        if p.get("review"):
+            # Unapproved or changed since approval: refused until reviewed.
+            btn.setText("REVIEW")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(p.get("error", ""))
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ color: {C.ACC2}; border-color: {C.ACC2}; }}
+            """)
+            btn.clicked.connect(lambda _, s=p.get("stem", ""): self._review(s))
+        elif not p["valid"]:
             btn.setText("BROKEN")
             btn.setEnabled(False)
             btn.setStyleSheet(f"""
@@ -609,6 +688,266 @@ class PluginManagerOverlay(QWidget):
         new_val = not get_plugin_enabled(name)
         save_plugin_enabled(name, new_val)
         self._style_toggle(btn, new_val)
+
+    # ── user-added plugins ───────────────────────────────────────────────────
+    def _pick_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Add a plugin", str(Path.home()), "Python plugin (*.py)")
+        if path:
+            self._show_warning(path)
+
+    def _review(self, stem: str):
+        try:
+            from core.plugin_loader import USER_PLUGINS_DIR
+            self._show_warning(str(USER_PLUGINS_DIR / f"{stem}.py"), review=True)
+        except Exception as e:
+            self._finish(f"Could not open it for review: {e}")
+
+    def _remove(self, stem: str):
+        try:
+            from core.plugin_loader import remove_user_plugin
+            ok, msg = remove_user_plugin(stem)
+            if ok and self._on_changed:
+                self._on_changed(stem)
+        except Exception as e:
+            msg = f"Could not remove it: {e}"
+        self._finish(msg)
+
+    def _finish(self, notice: str):
+        if self._reopen:
+            self.hide()
+            self._reopen(notice)
+        else:
+            self.hide()
+
+    def _show_warning(self, path: str, review: bool = False):
+        """The approval step: what the file is, what it will be able to do."""
+        from core.plugin_loader import inspect_user_plugin
+        info = inspect_user_plugin(path)
+        if self._warn is not None:
+            self._warn.deleteLater()
+        box = QFrame()
+        box.setStyleSheet(f"""
+            QFrame {{ background: rgba(20, 6, 0, 230); border: 1px solid {C.ACC};
+                      border-radius: 4px; }}
+            QLabel {{ border: none; background: transparent; }}
+        """)
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(12, 10, 12, 10)
+        bl.setSpacing(6)
+
+        def _lbl(text, colour, size=8, bold=False):
+            w = QLabel(text)
+            w.setWordWrap(True)
+            w.setTextFormat(Qt.TextFormat.PlainText)
+            w.setFont(hud_font(size, QFont.Weight.Bold) if bold else hud_font(size))
+            w.setStyleSheet(f"color: {colour};")
+            bl.addWidget(w)
+            return w
+
+        if not info["ok"]:
+            _lbl("⚠  CANNOT ADD THIS FILE", C.RED, 9, True)
+            _lbl(info["error"], C.TEXT)
+        else:
+            _lbl("⚠  REVIEW BEFORE YOU APPROVE" if review else "⚠  ADD A PLUGIN?", C.ACC, 9, True)
+            _lbl(f"{info['name']}  —  {Path(info['file']).name}", C.WHITE, 8, True)
+            if info["description"]:
+                _lbl(info["description"][:300], C.TEXT_MED)
+            files = [Path(info["file"]).name] + info["helpers"]
+            _lbl("Files: " + ", ".join(files), C.TEXT_MED)
+            if info["missing"]:
+                _lbl("Not found next to it: " + ", ".join(info["missing"])
+                     + " — it may fail to load.", C.ACC2)
+            _lbl("SHA-256: " + info["sha256"][:32] + "…", C.TEXT_DIM, 7)
+            _lbl("A plugin is a Python program. Once switched on it runs with YOUR "
+                 "permissions: it can read, change and delete your files, use the "
+                 "network, and act on what you say to the assistant. Only approve "
+                 "plugins from someone you trust. It starts switched OFF, and if the "
+                 "file changes later it is blocked until you review it again.", C.TEXT)
+
+        btns = QHBoxLayout()
+        if info["ok"]:
+            ok_btn = QPushButton("APPROVE")
+            ok_btn.setFixedHeight(28)
+            ok_btn.setFont(hud_font(8, QFont.Weight.Bold))
+            ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            ok_btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {C.ACC};
+                               border: 1px solid {C.ACC}; border-radius: 3px; }}
+                QPushButton:hover {{ color: {C.ACC2}; border-color: {C.ACC2}; }}
+            """)
+            ok_btn.clicked.connect(lambda _, p=path: self._approve(p))
+            btns.addWidget(ok_btn)
+        no_btn = QPushButton("CANCEL")
+        no_btn.setFixedHeight(28)
+        no_btn.setFont(hud_font(8))
+        no_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        no_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_MED};
+                           border: 1px solid {C.BORDER}; border-radius: 3px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        no_btn.clicked.connect(self._cancel_warning)
+        btns.addWidget(no_btn)
+        bl.addLayout(btns)
+
+        self._warn = box
+        self._lay.insertWidget(self._lay.count() - 2, box)   # above ADD / CLOSE
+        self._relayout()
+
+    def _cancel_warning(self):
+        if self._warn is not None:
+            self._warn.hide()
+            self._warn.deleteLater()
+            self._warn = None
+            self._relayout()
+
+    def _relayout(self):
+        self.adjustSize()
+        p = self.parentWidget()
+        if p is not None:
+            h = min(self.sizeHint().height(), p.height() - 16)
+            self.setGeometry((p.width() - self.width()) // 2,
+                             max(8, (p.height() - h) // 2), self.width(), h)
+
+    def _approve(self, path: str):
+        try:
+            from core.plugin_loader import install_user_plugin
+            ok, msg, stem = install_user_plugin(path)
+            if ok and self._on_changed:
+                _ok2, msg2 = self._on_changed(stem)
+                if not _ok2:
+                    msg += f" It did not load yet: {msg2}"
+        except Exception as e:
+            msg = f"Could not add it: {e}"
+        self._finish(msg)
+
+
+class FirstStepsOverlay(QWidget):
+    """First steps — one thing to try in each area the assistant covers
+    (core/first_steps.py). An item ticks itself off when its tool really
+    succeeded; clicking the phrase sends it as if the user typed it.
+    `send(text)` is the window's typed-command path."""
+
+    _OW = 460
+
+    def __init__(self, send=None, parent=None):
+        super().__init__(parent)
+        self._send = send
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            FirstStepsOverlay {{
+                background: rgba(0, 6, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self.setFixedWidth(self._OW)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(20, 16, 20, 16)
+        self._lay.setSpacing(6)
+        self._sig = None
+        self._render()
+        self._timer = QTimer(self)          # tick items off while it is open
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start(3000)
+
+    def _clear(self):
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            elif item.layout() is not None:
+                lay = item.layout()
+                while lay.count():
+                    sub = lay.takeAt(0)
+                    if sub.widget() is not None:
+                        sub.widget().deleteLater()
+                lay.deleteLater()
+
+    def _refresh(self):
+        try:
+            from core import first_steps
+            sig = tuple(i["done"] for i in first_steps.status())
+        except Exception:
+            return
+        if sig != self._sig:
+            self._render()
+
+    def _render(self):
+        from core import first_steps
+        items = first_steps.status()
+        self._sig = tuple(i["done"] for i in items)
+        self._clear()
+        done = sum(1 for i in items if i["done"])
+        hdr = QLabel(f"✓  FIRST STEPS   {done}/{len(items)}")
+        hdr.setFont(hud_font(12, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._lay.addWidget(hdr)
+        sub = QLabel("Try one thing in each area. Click a phrase to say it, or say it "
+                     "yourself — it ticks off when it worked.")
+        sub.setWordWrap(True)
+        sub.setFont(hud_font(8))
+        sub.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._lay.addWidget(sub)
+        for key, label in first_steps.AREAS:
+            area = QLabel(label.upper())
+            area.setFont(hud_font(9, QFont.Weight.Bold))
+            area.setStyleSheet(f"color: {C.TEXT}; background: transparent; margin-top: 6px;")
+            self._lay.addWidget(area)
+            for it in (i for i in items if i["area"] == key):
+                row = QHBoxLayout()
+                row.setSpacing(8)
+                mark = QLabel("✓" if it["done"] else "○")
+                mark.setFixedWidth(16)
+                mark.setFont(hud_font(10, QFont.Weight.Bold))
+                mark.setStyleSheet(f"color: {C.GREEN if it['done'] else C.TEXT_DIM}; "
+                                   f"background: transparent;")
+                row.addWidget(mark)
+                title = QLabel(it["title"])
+                title.setFont(hud_font(8))
+                title.setStyleSheet(f"color: {C.TEXT_DIM if it['done'] else C.TEXT}; "
+                                    f"background: transparent;")
+                row.addWidget(title, stretch=1)
+                say = QPushButton(f"\u201c{it['say']}\u201d")
+                say.setFont(hud_font(8))
+                say.setCursor(Qt.CursorShape.PointingHandCursor)
+                say.setStyleSheet(f"""
+                    QPushButton {{ background: transparent; color: {C.PRI_DIM};
+                                   border: 1px solid {C.BORDER}; border-radius: 3px;
+                                   padding: 3px 8px; text-align: left; }}
+                    QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
+                """)
+                say.clicked.connect(lambda _, t=it["say"]: self._say(t))
+                row.addWidget(say)
+                self._lay.addLayout(row)
+        self._lay.addSpacing(6)
+        close_btn = QPushButton("CLOSE")
+        close_btn.setFixedHeight(30)
+        close_btn.setFont(hud_font(9))
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_MED};
+                           border: 1px solid {C.BORDER}; border-radius: 3px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        close_btn.clicked.connect(self._close)
+        self._lay.addWidget(close_btn)
+        self.adjustSize()
+
+    def _say(self, text: str):
+        if callable(self._send):
+            self._send(text)
+
+    def _close(self):
+        try:
+            from core import first_steps
+            first_steps.close()
+        except Exception:
+            pass
+        self._timer.stop()
+        self.hide()
 
 
 class _HudOverlay(QWidget):

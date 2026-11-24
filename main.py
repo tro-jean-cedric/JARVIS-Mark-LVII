@@ -711,6 +711,20 @@ class JarvisLive:
         )
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
+        # + ADD PLUGIN in the Plugin Manager: re-read one user plugin at once.
+        self.ui.on_user_plugin_changed = self._plugin_registry.refresh_user_plugin
+        # "Things to say" chips under the head (core/suggest.py).
+        self.ui.get_suggestions = self._suggestions
+
+        # Remote Mode (core/remote_mode.py): re-apply the saved keep-awake /
+        # lock-when-idle switches. Its own thread; a failure only logs.
+        def _remote_mode_start() -> None:
+            try:
+                from core import remote_mode
+                remote_mode.start_from_settings(self.ui.write_log)
+            except Exception as e:
+                print(f"[JARVIS] Remote Mode start skipped: {e}")
+        threading.Thread(target=_remote_mode_start, daemon=True, name="remote-mode-start").start()
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
         # Plugins that act at launch (Face Lock locking at start, the Telegram
@@ -1031,9 +1045,44 @@ class JarvisLive:
             coro = self._routine_checkin(options)
         elif name == "news_watch":
             coro = self._routine_news_watch()
+        elif name == "weekly_recap":
+            coro = self._routine_weekly_recap()
         else:
             raise ValueError(f"unknown built-in routine '{name}'")
         asyncio.run_coroutine_threadsafe(coro, loop)
+
+    async def _routine_weekly_recap(self) -> None:
+        """Once a week: what the assistant did for the user (counted from
+        actions/action_history.py, never guessed) and one feature they have not
+        tried yet (core/recap.py)."""
+        if not self.session:
+            return
+        try:
+            from core import recap
+            summary, tip = await asyncio.to_thread(recap.build, self._tool_catalog())
+            memory = await asyncio.to_thread(load_memory)
+            lang_e = (memory.get("identity", {}) or {}).get("language", {})
+            lang = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip()
+            lang_clause = (f" Speak in {lang} unless the user has since spoken another "
+                           f"language." if lang else "")
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": recap.instruction(summary, tip, lang_clause)}]},
+                turn_complete=True,
+            )
+            print("[JARVIS] Weekly recap sent.")
+        except Exception as e:
+            print(f"[Recap] {e}")
+
+    def _suggestions(self) -> list[str]:
+        """'Things to say' chips for the window (core/suggest.py, no model call)."""
+        try:
+            from core import suggest
+            names = {t.get("name", "") for t in self._tool_catalog()}
+            names |= {t["name"] for t in TOOL_DECLARATIONS}
+            return suggest.current(names)
+        except Exception as e:
+            print(f"[Suggest] {e}")
+            return []
 
     async def _routine_checkin(self, options: dict) -> None:
         """The proactive check-in, when the routine says the moment has come."""
@@ -2302,15 +2351,21 @@ class JarvisLive:
         # What the briefing covers is the routine's to say (core/routines): the
         # news and its topic, and anything the user added to it. No options is
         # the briefing as it always was.
-        options   = options or {}
-        want_news = options.get("news", True) is not False
-        topic     = str(options.get("news_topic") or "").strip() or "top world news today"
-        extra     = str(options.get("extra") or "").strip()
+        # Parts (weather, calendar, news...), language, news topic/region and
+        # city are set by voice through the routines tool; core/briefing.py
+        # fetches each part and keeps only what really arrived.
+        from core import briefing as _briefing
+        options   = _briefing.normalize(options)
+        parts     = options["parts"]
+        want_news = bool(parts)              # "fetching your briefing" in phase 1
+        extra     = options["extra"]
+        if options["language"]:
+            lang = options["language"]       # the briefing's own language wins
 
-        # Start fetching news immediately — runs in parallel while phase 1 plays
+        # Start fetching every part immediately — in parallel while phase 1 plays
         loop = asyncio.get_event_loop()
-        news_future = (loop.run_in_executor(None, _fetch_news_sync, topic)
-                       if want_news else None)
+        news_future = (loop.run_in_executor(None, _briefing.gather, options)
+                       if parts else None)
 
         await asyncio.sleep(0.3)
         if not self.session:
@@ -2340,7 +2395,7 @@ class JarvisLive:
 
         p1 = (
             f"Greet the user warmly, mention it is {time_str}"
-            f"{', and say you are fetching the news now' if want_news else ''}.{session_clause} "
+            f"{', and say you are getting their briefing ready' if want_news else ''}.{session_clause} "
             f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
         )
 
@@ -2383,53 +2438,32 @@ class JarvisLive:
                 else:
                     await asyncio.sleep(1.0)
 
-                news_text = ""
+                result = {"sections": [], "skipped": [], "options": options}
                 if news_done is not None:
                     try:
-                        news_text = await asyncio.wait_for(news_done, timeout=8.0)
+                        result = await asyncio.wait_for(
+                            news_done, timeout=_briefing.FETCH_TIMEOUT + 3)
                     except Exception as e:
-                        self.ui.write_log(f"SYS: News fetch timed out/failed: {e!r}")
-                        news_text = ""
+                        self.ui.write_log(f"SYS: Briefing fetch timed out/failed: {e!r}")
 
                 if not self.session:
                     return
 
-                extra_clause = (f"\n\nThen also do this, which the user asked to be part of "
-                                f"their briefing: {extra} — you may use tools for it."
-                                if extra else "")
-                no_tools = "" if extra else " Do not call any tools."
-
-                failed = (not news_text) or news_text.startswith(
-                    ("No news found", "Search failed", "Please provide")
-                )
-                if not want_news:
-                    p2 = (f"[BRIEFING] The user asked for this to be part of their briefing: "
-                          f"{extra} — do it now, using tools if it needs them.{lang_str}")
-                elif not failed:
-                    # Show on UI content panel immediately
-                    default_topic = topic == "top world news today"
-                    self.ui.show_content("NEWS — top world news today" if default_topic else "NEWS",
-                                         news_text)
-
-                    p2 = (
-                        f"[BRIEFING] Here are today's news headlines ({topic}):\n{news_text}\n\n"
-                        "Pick ONE headline, summarise it in one sentence, then say the full list "
-                        f"is displayed on screen.{no_tools}{extra_clause}{lang_str}"
-                    )
-                else:
-                    self.ui.write_log(
-                        f"SYS: News unavailable — backend returned: {news_text[:120]!r}"
-                    )
-                    p2 = (
-                        "News headlines could not be fetched right now. "
-                        f"Let the user know briefly.{extra_clause}{lang_str}"
-                    )
+                # A part whose data could not be fetched is left out of what
+                # is said (never guessed); the reason goes to the log.
+                for s in result.get("skipped") or []:
+                    self.ui.write_log(f"SYS: Briefing — {s['part']} skipped: {s['why']}")
+                if result.get("sections"):
+                    self.ui.show_content("BRIEFING", _briefing.panel_text(result))
+                p2 = _briefing.spoken_instruction(result, lang_str)
+                if not p2:
+                    return
 
                 await self.session.send_client_content(
                     turns={"role": "user", "parts": [{"text": p2}]},
                     turn_complete=True,
                 )
-                print("[JARVIS] Briefing phase 2 (news) sent.")
+                print("[JARVIS] Briefing phase 2 (parts) sent.")
             except Exception as e:
                 print(f"[Briefing] Phase 2 error: {e}")
                 print(f"[JARVIS] Briefing phase 2 failed: {e}")

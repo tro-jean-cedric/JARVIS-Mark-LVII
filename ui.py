@@ -185,6 +185,28 @@ class JarvisUI:
         self._win.get_plugin_settings = cb
 
     @property
+    def get_suggestions(self):
+        return self._win.get_suggestions
+
+    @get_suggestions.setter
+    def get_suggestions(self, cb):
+        # () -> list[str]: "Things to say" chips under the head (core/suggest.py)
+        self._win.get_suggestions = cb
+
+    def refresh_suggestions(self) -> None:
+        """Thread-safe: rebuild the "Things to say" chips now."""
+        self._win._refresh_chips()
+
+    @property
+    def on_user_plugin_changed(self):
+        return self._win.on_user_plugin_changed
+
+    @on_user_plugin_changed.setter
+    def on_user_plugin_changed(self, cb):
+        # (stem) -> (ok, msg): the plugin registry re-reads one user plugin
+        self._win.on_user_plugin_changed = cb
+
+    @property
     def on_wake_toggle(self):
         return self._win.on_wake_toggle
 
@@ -389,6 +411,16 @@ class JarvisUI:
     def stop_camera_stream(self) -> None:
         """Thread-safe: stop the live camera feed."""
         self._win.stop_camera_stream()
+
+    def show_hud_frame(self, jpeg: bytes) -> None:
+        """Thread-safe: draw one JPEG frame in the large HUD area (where the
+        avatar normally is). For plugins that render their own picture, such
+        as holo_desk's panels over the camera image."""
+        self._win._hud_frame_sig.emit(bytes(jpeg or b""))
+
+    def stop_hud_frames(self) -> None:
+        """Thread-safe: give the large HUD area back to the avatar."""
+        self._win._hud_frame_stop_sig.emit()
 
     @property
     def assistant_name(self) -> str:
