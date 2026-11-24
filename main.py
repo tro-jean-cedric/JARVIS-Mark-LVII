@@ -424,6 +424,22 @@ def _redact(text) -> str:
     return s
 
 
+def _transcription_languages() -> dict:
+    """The active languages as a hint to Live's speech recogniser. Without it a
+    French speaker was transcribed as Portuguese three times in one evening
+    ('Obrigado, fui para mim no mail…') and the model acted on the garble.
+    Automatic mode sends nothing, as before. Verified against the live API:
+    `language_codes` is accepted (`language_hints` is not a list field)."""
+    try:
+        from core import languages
+        if languages.is_automatic():
+            return {}
+        codes = [c for c in languages.active() if c][:4]
+        return {"language_codes": codes} if codes else {}
+    except Exception:
+        return {}
+
+
 def _fold_said(text: str) -> str:
     """Lower-case letters and digits only, accents dropped: what two
     transcriptions of the same sentence still share."""
@@ -1709,7 +1725,7 @@ class JarvisLive:
         cfg = dict(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
-            input_audio_transcription={},
+            input_audio_transcription=_transcription_languages(),
             system_instruction="\n".join(parts),
             # strip_meta drops this project's own `tier` / `brief` keys, which
             # exist for the local-engine tool budget and are not part of the
