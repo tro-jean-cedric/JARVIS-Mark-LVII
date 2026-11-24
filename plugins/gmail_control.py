@@ -95,6 +95,11 @@ def build_query(text: str, sender: str = "") -> str:
     if not text:
         return " ".join(parts)
     if re.search(r"\b[a-z_]+:\S", text) or '"' in text:
+        # The model writes operators glued together — 'subject:"LinkedIn"is:unread'
+        # was observed — which Gmail reads as one odd term. Split them.
+        text = re.sub(r'(")(?=[a-z_]+:)', r"\1 ", text)
+        text = re.sub(r"(\S)(?=(?:from|to|subject|is|in|label|has|after|before|"
+                      r"newer_than|older_than|category|filename):)", r"\1 ", text)
         return " ".join(parts + [text])
     low = text.lower()
     m = re.search(r"\bfrom ([\w.@+'-]+(?: [A-Z][\w'-]+)?)", text)
