@@ -101,9 +101,36 @@ PLUGIN = {
     },
 }
 
+def _check_bot(values: dict):
+    """The settings screen's CHECK BOT button: is the token real, and which bot
+    is it? Asks Telegram's getMe only — it reads no messages and sends nothing."""
+    tok = "".join(str((values or {}).get("bot_token") or "").split())
+    if not tok:
+        return False, "Paste the bot token from @BotFather first (see HOW TO SET UP)."
+    if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", tok):
+        return False, ("That does not look like a bot token — it should look like "
+                       "123456789:AA… (numbers, a colon, then about 35 letters).")
+    doc = _api("getMe", token=tok, timeout=15)
+    if doc.get("ok"):
+        bot = doc.get("result") or {}
+        user = bot.get("username") or "?"
+        paired = len(_parse_ids((values or {}).get("allowed_chat_ids")))
+        nxt = ("A phone is already paired." if paired else
+               "Next: SAVE, say 'start the Telegram remote', then send your pairing code "
+               f"to the bot in Telegram: t.me/{user}")
+        return True, f"Token works: @{user} ({bot.get('first_name') or 'bot'}). {nxt}"
+    code = doc.get("error_code")
+    if code == 401:
+        return False, "Telegram says this token is not valid — copy it again from @BotFather (/mybots → API Token)."
+    if code in (-1, 0):
+        return False, f"Could not reach Telegram: {doc.get('description') or 'no connection'}."
+    return False, f"Telegram answered: {doc.get('description') or code}."
+
+
 PLUGIN_SETTINGS = {
     "namespace": NS,
     "title": "TELEGRAM REMOTE",
+    "action": {"label": "CHECK BOT", "run": _check_bot},
     "fields": [
         {"key": "bot_token", "label": "Bot token (from @BotFather)", "type": "password"},
         {"key": "pairing_code", "label": "Pairing code — any secret phrase; send it to the bot once",

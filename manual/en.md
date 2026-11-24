@@ -156,6 +156,14 @@ guard, push-up counter, face lock, gesture control, holo desk, home lights
 (MCP), screen agent, planet watch, visual panel, live panels and live
 subtitles. Ask "what can the X plugin do?" for details.
 
+Setting one up: every plugin that needs an account, a key or a device has a
+"❓ HOW TO SET UP" button under its name in ⚙ PLUGIN SETTINGS. It explains where
+to get each value (Telegram bot token, Google client ID, WhatsApp QR code, Tuya
+keys, printer access code…) step by step, with links. The user can also just
+ask "how do I set up Telegram?" — the setup_guide tool shows the same steps on
+screen. There are also guides for the Gemini API key / "out of quota" and for
+Remote Mode / Wake-on-LAN.
+
 Your own plugins: in the Plugin Manager press "+ ADD PLUGIN", pick the .py file,
 read the warning and APPROVE. It is listed as "added by you" and starts OFF.
 A plugin runs with your own permissions and can do anything you can — only add

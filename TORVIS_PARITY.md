@@ -107,6 +107,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | Phone control safety (confirm risky steps on phone) | ✅ | Two-step Yes/No buttons on the phone for `core.confirm` requests from a phone turn |
 | Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | 🟡 | `actions/remote_mode.py` + `core/remote_mode.py`: keep awake, lock when idle, screen off, hibernate (confirm), WoL info/setup/send; phone `/awake`, `/hibernate`. No settings panel (voice/phone only); "lock when screen off" is idle-based; no smart-plug or sleep-then-self-wake flow |
 | Shared webcam for HUD preview + plugins | ✅ | `gui/window.py` camera preview now uses `plugins/_camera.py` |
+| Setup guides ("?" next to each plugin's setup) | ✅ | `core/setup_guides.py`: "❓ HOW TO SET UP" in ⚙ PLUGIN SETTINGS for the 12 account/device sections (steps + links), `setup_guide` voice tool, extra guides for Gemini key/quota and Wake-on-LAN, Telegram CHECK BOT button |
 | Subscription, plans, allowance, trial, signed auto-update, relay | ⛔ | Torvis commercial service |
 | Interface in 10 languages | ⛔ | Not requested |
 

@@ -48,6 +48,16 @@ def _opt_text(value) -> Optional[str]:
     return text or None
 
 
+def _guide_for(namespace: str, plugin_guide=None) -> Optional[dict]:
+    """The setup guide shown under a settings section, or None. Never raises:
+    a missing or broken guides module only costs the "HOW TO SET UP" button."""
+    try:
+        from core import setup_guides
+        return setup_guides.for_section(namespace, plugin_guide)
+    except Exception:
+        return plugin_guide if isinstance(plugin_guide, dict) else None
+
+
 @dataclass
 class PluginRecord:
     name: str
@@ -198,6 +208,9 @@ class PluginRegistry:
                 "fields":    rec.settings.get("fields", []),
                 "values":    get_plugin_config(ns),
                 "action":    rec.settings.get("action"),   # optional test/connect button
+                # optional "❓ HOW TO SET UP" steps: the plugin's own, else the
+                # built-in guide for this namespace (core/setup_guides.py)
+                "guide":     _guide_for(ns, rec.settings.get("guide")),
             })
         return out
 

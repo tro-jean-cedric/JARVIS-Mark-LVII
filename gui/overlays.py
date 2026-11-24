@@ -1833,6 +1833,13 @@ class PluginSettingsOverlay(QWidget):
         form.addSpacing(4)
         form.addWidget(self._lbl(title, 10, True, C.PRI))
 
+        # "❓ HOW TO SET UP" — step-by-step help for getting the values below
+        # (core/setup_guides.py). Collapsed until pressed; links open in the
+        # browser.
+        guide = sec.get("guide")
+        if isinstance(guide, dict) and guide.get("steps"):
+            self._build_guide(form, guide)
+
         for field in fields:
             if not isinstance(field, dict) or not field.get("key"):
                 continue
@@ -1902,6 +1909,44 @@ class PluginSettingsOverlay(QWidget):
         line = QFrame(); line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet(f"color: {C.BORDER}; margin: 4px 0;")
         form.addWidget(line)
+
+    def _build_guide(self, form: QVBoxLayout, guide: dict):
+        try:
+            from core.setup_guides import as_html
+            body_html = as_html(guide, link_color=C.PRI, dim_color=C.TEXT_DIM)
+        except Exception as e:
+            body_html = f"Guide unavailable: {e}"
+        label = "❓  HOW TO SET UP" + (f"  ·  {guide['time']}" if guide.get("time") else "")
+
+        btn = QPushButton(f"▸  {label}")
+        btn.setCheckable(True)
+        btn.setFixedHeight(28)
+        btn.setFont(hud_font(8, QFont.Weight.Bold))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {C.PRI}; text-align: left;
+                padding-left: 8px; border: 1px dashed {C.PRI_DIM}; border-radius: 3px; }}
+            QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
+            QPushButton:checked {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; }}
+        """)
+
+        box = QLabel(body_html)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setWordWrap(True)
+        box.setOpenExternalLinks(True)
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        box.setFont(hud_font(9))
+        box.setStyleSheet(f"QLabel {{ color: {C.TEXT}; background: #000d12; "
+                          f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 8px; }}")
+        box.setVisible(False)
+
+        def _toggle(on: bool, b=btn, t=label, w=box):
+            w.setVisible(on)
+            b.setText(f"{'▾' if on else '▸'}  {t}")
+
+        btn.toggled.connect(_toggle)
+        form.addWidget(btn)
+        form.addWidget(box)
 
     def _style_toggle(self, btn: QPushButton):
         on = btn.isChecked()
