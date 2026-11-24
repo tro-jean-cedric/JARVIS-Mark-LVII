@@ -45,6 +45,7 @@ except Exception as _e:
 
 import asyncio
 import re
+import unicodedata
 import threading
 import time
 import json
@@ -423,6 +424,27 @@ def _redact(text) -> str:
     return s
 
 
+def _fold_said(text: str) -> str:
+    """Lower-case letters and digits only, accents dropped: what two
+    transcriptions of the same sentence still share."""
+    t = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(ch for ch in t if ch.isalnum() and not unicodedata.combining(ch)).lower()
+
+
+def _is_own_echo(heard: str, said: str) -> bool:
+    """Is `heard` mostly the assistant's own recent words coming back through
+    the microphone? Short replies ("oui", "ok") never are."""
+    h = _fold_said(heard)
+    if len(h) < 12 or not said:
+        return False
+    if h in said:
+        return True
+    import difflib
+    sm = difflib.SequenceMatcher(None, h, said, autojunk=False)
+    matched = sum(b.size for b in sm.get_matching_blocks() if b.size >= 4)
+    return matched / len(h) >= 0.7
+
+
 def _clean_transcript(text: str) -> str:
     text = _CTRL_RE.sub("", text)
     text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
@@ -735,6 +757,8 @@ class JarvisLive:
         # until the user says or types something.
         self._briefing_started = 0.0
         self._briefing_until = 0.0
+        self._said_fold = ""           # recent words we spoke, folded (echo check)
+        self._said_at = 0.0
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
@@ -1500,6 +1524,25 @@ class JarvisLive:
         except Exception:
             pass
 
+    def _looks_like_own_voice(self, heard: str) -> bool:
+        """Input transcription that is really the assistant, heard through the
+        speakers. Two signals: it repeats what we said in the last 45 s, or it
+        addresses the user by the name WE call them ("Mister John") — observed
+        both ways, the second for words the output transcript never carried."""
+        if time.monotonic() - self._said_at < 45 and _is_own_echo(heard, self._said_fold):
+            return True
+        name = getattr(self, "_user_name", "") or ""
+        words = [_fold_said(w) for w in re.split(r"\s+", name) if _fold_said(w)]
+        if words:
+            h = " " + " ".join(_fold_said(w) for w in re.split(r"\s+", heard)) + " "
+            last = words[-1]
+            forms = {" ".join(words)} if len(words) > 1 else set()
+            forms |= {f"{hon} {last}" for hon in
+                      ("mr", "mister", "monsieur", "sir", "madame", "mrs", "ms", "miss")}
+            if any(f" {f} " in h for f in forms):
+                return True
+        return False
+
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
@@ -1554,6 +1597,7 @@ class JarvisLive:
             _cfg = json.loads(open(API_CONFIG_PATH, encoding="utf-8").read())
             self._asst_name = (_cfg.get("assistant_name") or "JARVIS").strip()
             _user_name = (_cfg.get("user_name") or "").strip()
+            self._user_name = _user_name
         except Exception:
             self._asst_name = "JARVIS"
             _user_name = ""
@@ -2257,6 +2301,10 @@ class JarvisLive:
                             # twice AND made the avatar mouth it twice.
                             if txt and not _is_repeat_chunk(txt, out_buf):
                                 out_buf.append(txt)
+                                # What we said, for telling our own echo from
+                                # the user (see _is_own_echo).
+                                self._said_fold = (self._said_fold + _fold_said(txt))[-3000:]
+                                self._said_at = time.monotonic()
                                 # Hand the words to the mouth as they arrive, so
                                 # the avatar can form the consonants the audio
                                 # alone cannot show. Pure string work — it adds
@@ -2267,9 +2315,15 @@ class JarvisLive:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
                                 in_buf.append(txt)
-                                self._last_user_speech = time.monotonic()
-                                self._last_user_input_at = self._last_user_speech
-                                self._last_user_text = " ".join(in_buf)[-200:]
+                                heard = " ".join(in_buf)
+                                # Our own voice from the speakers, transcribed,
+                                # is not the user: it must not open the
+                                # briefing's tool guard or pass the shutdown
+                                # check (both observed).
+                                if not self._looks_like_own_voice(heard):
+                                    self._last_user_speech = time.monotonic()
+                                    self._last_user_input_at = self._last_user_speech
+                                    self._last_user_text = heard[-200:]
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2285,6 +2339,10 @@ class JarvisLive:
                                 continue
 
                             full_in = " ".join(in_buf).strip()
+                            if full_in and self._looks_like_own_voice(full_in):
+                                print(_redact(f"[JARVIS] 🔁 echo of own voice ignored: {full_in[:200]}"))
+                                full_in = ""
+                                in_buf = []
                             if full_in:
                                 self._last_out_logged = ""   # new exchange
                                 # Also on the console: tool calls are printed
