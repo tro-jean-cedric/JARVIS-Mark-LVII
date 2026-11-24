@@ -100,12 +100,15 @@ GUIDES: dict[str, dict] = {
         "title": "WhatsApp — calls and messages",
         "aliases": ["whatsapp", "whats app", "wa", "call", "video call", "message"],
         "time": "about 1 minute",
-        "need": "WhatsApp on your phone. On Mac and Linux: Google Chrome or Microsoft Edge. On "
-                "Windows the WhatsApp desktop app also works.",
+        "need": "WhatsApp on your phone. On Windows and Mac the WhatsApp desktop app (signed in) "
+                "is used when it is installed; otherwise, and on Linux, Google Chrome or "
+                "Microsoft Edge for WhatsApp Web.",
         "steps": [
-            "Leave HOW TO REACH WHATSAPP on 'auto' (Windows desktop app if installed, otherwise "
-            "WhatsApp Web).",
-            "Press CHECK. A browser window opens on WhatsApp Web with a QR code.",
+            "Leave HOW TO REACH WHATSAPP on 'auto' (the WhatsApp desktop app on Windows and Mac "
+            "if installed, otherwise WhatsApp Web). With the desktop app, sign in to it, open any "
+            "chat and press CHECK — on a Mac, allow Accessibility for the app JARVIS runs from "
+            "(System Settings → Privacy & Security → Accessibility) if asked; that is all.",
+            "WhatsApp Web only: press CHECK. A browser window opens on WhatsApp Web with a QR code.",
             "On your phone open WhatsApp → Settings (iPhone) or the ⋮ menu (Android) → Linked "
             "devices → Link a device, and scan the QR code.",
             "Wait until your chats appear in that window. You can minimise it, but keep it open — "
@@ -115,7 +118,7 @@ GUIDES: dict[str, dict] = {
                 "It always asks you to confirm before it sends or dials.",
         "note": "Calling from WhatsApp Web depends on WhatsApp offering calls in the browser for "
                 "your account; if the call button is missing there, calls need the WhatsApp desktop "
-                "app (Windows). Messages work either way.",
+                "app (Windows or Mac). Messages work either way.",
     },
 
     # ── Cloud agent (your own server) ───────────────────────────────────────

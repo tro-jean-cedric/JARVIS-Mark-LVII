@@ -2,7 +2,7 @@
 plugins/whatsapp_call.py — "call Mom on WhatsApp", "video call Ali", "hang up".
 
 Places a WhatsApp voice or video call by driving the WhatsApp desktop app
-(Windows) or WhatsApp Web (macOS, Linux, or by choice) through
+(Windows, macOS) or WhatsApp Web (Linux, no desktop app, or by choice) through
 plugins/_whatsapp_core.py, and ends a call in progress.
 
 Ringing somebody cannot be taken back, so placing a call goes through

@@ -251,7 +251,9 @@ TOOL = {
         "Spotify', 'what does the status bar in Excel say', 'type hello into the search box "
         "in Teams'. Steps that send, pay, delete, submit or accept ask the user to confirm on "
         "screen first. If an app shows nothing here (games, some custom apps), use "
-        "computer_control or the screen instead. Window size/position is window_control."
+        "computer_control or the screen instead. Window size/position is window_control. "
+        "Never use this to send a message (WhatsApp, Telegram...) - send_message does "
+        "that by itself - or to place a WhatsApp call - that is whatsapp_call."
     ),
     "brief": "Press/read/type named controls inside an app via accessibility (list/press/read/type).",
     "tier": "extra",

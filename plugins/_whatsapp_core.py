@@ -10,13 +10,16 @@ plugins/whatsapp_call.py (calls) and actions/send_message.py (messages):
     ok, reason = transport.hangup()
     sent, failure = transport.send_message_to("Mom", "on my way")
 
-TWO TRANSPORTS
+THREE TRANSPORTS
     WindowsDesktop   the WhatsApp desktop app on Windows, read and driven through
                      the accessibility tree (pywinauto, UIA backend).
+    MacDesktop       the WhatsApp desktop app on macOS, read and driven through
+                     the Accessibility API (pyobjc) by its stable AXIdentifiers.
     WebTransport     WhatsApp Web in a real Chrome/Edge window driven by
                      Playwright, with its own profile in config/whatsapp_web/
                      (git-ignored: it IS a linked WhatsApp session). Used on
-                     macOS and Linux, and on Windows when set in settings.
+                     Linux, on Windows/macOS when the desktop app is not
+                     installed, and anywhere when set in settings.
 
 THE RULE: NEVER ASSUME, ALWAYS READ BACK
     A wrong tap rings a real person. So the conversation that opened is read
@@ -771,6 +774,385 @@ class WindowsDesktop(Transport):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  WhatsApp desktop app on macOS (Accessibility API)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The Mac app (net.whatsapp.WhatsApp, a Catalyst app) publishes stable
+# AXIdentifiers for every control this file needs, in every UI language:
+#
+#   NavigationBar_NewChatButton      opens the contact picker
+#   PickerView_SearchBar             its search field (focused, AXValue settable)
+#   PickerView_ContactCell           one contact (AXPress opens the chat)
+#   PickerView_CloseButton           closes the picker
+#   NavigationBar_HeaderViewButton   the open conversation's name
+#   NavigationBar_CallButton         voice call
+#   NavigationBar_VideoCallButton    video call
+#   ChatBar_ComposerTextView         the message box (AXValue readable)
+#   menu item "end_call"             Call ▸ End Call
+#
+# Measured quirks that shape the code below:
+#   * While WhatsApp is in the background it exposes NO windows to
+#     Accessibility — it must be activated, then polled until one appears.
+#   * Quartz Unicode key events do not reach WhatsApp's text fields; a
+#     clipboard paste (⌘V) does, accents and emoji included.
+#   * The chat-list search bar is unusable for automation (see open_chat).
+#   * An empty field reports its placeholder in AXNumberOfCharacters; only
+#     AXValue says what is really typed.
+
+_MAC_BUNDLE = "net.whatsapp.WhatsApp"
+_LRM = dict.fromkeys(map(ord, "‎‏⁨⁩‪‫‬"), None)
+
+
+def _ax_clean(text) -> str:
+    return str(text or "").translate(_LRM).strip()
+
+
+class MacDesktop(Transport):
+    label = "WhatsApp desktop app (macOS)"
+
+    def __init__(self):
+        import ApplicationServices  # noqa: F401  (fail early when missing)
+        import Quartz               # noqa: F401
+        import AppKit               # noqa: F401
+
+    # ── accessibility primitives ────────────────────────────────────────────
+    @staticmethod
+    def _attr(node, name):
+        import ApplicationServices as AS
+        try:
+            err, value = AS.AXUIElementCopyAttributeValue(node, name, None)
+            return value if err == 0 else None
+        except Exception:
+            return None
+
+    def _walk(self, root, budget_s: float = 4.0, limit: int = 4000):
+        """(node, role, name, ident) breadth-first under `root`."""
+        out, frontier = [], [root]
+        end = time.monotonic() + budget_s
+        while frontier and len(out) < limit and time.monotonic() < end:
+            node = frontier.pop(0)
+            role = str(self._attr(node, "AXRole") or "")
+            name = _ax_clean(self._attr(node, "AXTitle") or self._attr(node, "AXDescription"))
+            ident = _ax_clean(self._attr(node, "AXIdentifier"))
+            out.append((node, role, name, ident))
+            frontier.extend(self._attr(node, "AXChildren") or [])
+        return out
+
+    def _find(self, root, ident: str):
+        for node, _role, _name, i in self._walk(root):
+            if i == ident:
+                return node
+        return None
+
+    def _app_el(self):
+        import AppKit
+        import ApplicationServices as AS
+        apps = AppKit.NSRunningApplication.runningApplicationsWithBundleIdentifier_(_MAC_BUNDLE)
+        if not apps or len(apps) == 0:
+            return None
+        return AS.AXUIElementCreateApplication(apps[0].processIdentifier())
+
+    def _frontmost(self, app) -> bool:
+        """Is WhatsApp the app with the keyboard? Asked of the window server,
+        not of WhatsApp: its own AXFrontmost goes False after some keystrokes
+        while it is plainly still in front."""
+        try:
+            pid = 0
+            import ApplicationServices as AS
+            err, pid = AS.AXUIElementGetPid(app, None)
+            from core import screenview
+            front = screenview.foreground_pid()
+            if front and pid:
+                return front == pid
+        except Exception:
+            pass
+        return bool(self._attr(app, "AXFrontmost"))
+
+    def _window(self, launch: bool = True):
+        """(app element, main window). Activates WhatsApp — it hides its windows
+        from Accessibility while in the background."""
+        import ApplicationServices as AS
+        if not AS.AXIsProcessTrusted():
+            raise RuntimeError("macOS has not given this app Accessibility permission — allow it in "
+                               "System Settings ▸ Privacy & Security ▸ Accessibility (the terminal "
+                               "or app JARVIS was started from), then try again")
+        app = self._app_el()
+        if app is None and not launch:
+            raise RuntimeError("WhatsApp is not running")
+        r = subprocess.run(["open", "-b", _MAC_BUNDLE], capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            raise RuntimeError(f"WhatsApp could not be opened ({(r.stderr or '').strip() or r.returncode})")
+        wait = _seconds(settings().get("launch_wait"), 8.0) if app is None else 4.0
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            app = app or self._app_el()
+            if app is not None:
+                win = self._attr(app, "AXMainWindow") or next(iter(self._attr(app, "AXWindows") or []), None)
+                if win is not None and self._frontmost(app):
+                    return app, win
+            time.sleep(0.2)
+        raise RuntimeError("WhatsApp did not show its window")
+
+    @staticmethod
+    def _center(node_attr, node) -> tuple[float, float] | None:
+        import ApplicationServices as AS
+        try:
+            ok1, p = AS.AXValueGetValue(node_attr(node, "AXPosition"), AS.kAXValueCGPointType, None)
+            ok2, s = AS.AXValueGetValue(node_attr(node, "AXSize"), AS.kAXValueCGSizeType, None)
+            if ok1 and ok2 and s.width > 0 and s.height > 0:
+                return p.x + s.width / 2, p.y + s.height / 2
+        except Exception:
+            pass
+        return None
+
+    def _click(self, app, node) -> bool:
+        """A real click on `node` — only when the point is on screen and the
+        window under it is WhatsApp's."""
+        c = self._center(self._attr, node)
+        if c is None:
+            return False
+        x, y = int(c[0]), int(c[1])
+        w, h = pyautogui.size()
+        if not (0 <= x < w and 0 <= y < h):
+            return False
+        try:
+            from core import screenview
+            import AppKit
+            pid = screenview.window_pid_at(x, y)
+            apps = AppKit.NSRunningApplication.runningApplicationsWithBundleIdentifier_(_MAC_BUNDLE)
+            if pid and apps and pid != apps[0].processIdentifier():
+                return False
+        except Exception:
+            pass
+        if not self._frontmost(app):
+            return False
+        pyautogui.click(x, y)
+        return True
+
+    @staticmethod
+    def _key(code: int, command: bool = False, pause: float = 0.05) -> None:
+        import Quartz
+        for down in (True, False):
+            ev = Quartz.CGEventCreateKeyboardEvent(None, code, down)
+            if command:
+                Quartz.CGEventSetFlags(ev, Quartz.kCGEventFlagMaskCommand)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+        time.sleep(pause)
+
+    def _paste(self, app, text: str) -> bool:
+        old = None
+        try:
+            old = pyperclip.paste()
+        except Exception:
+            pass
+        pyperclip.copy(text)
+        time.sleep(0.05)
+        if not self._frontmost(app):
+            return False
+        self._key(9, command=True)          # ⌘V (key position, layout-proof)
+        time.sleep(0.35)
+        if old is not None:
+            try:
+                pyperclip.copy(old)
+            except Exception:
+                pass
+        return True
+
+    def _title(self, win) -> str:
+        node = self._find(win, "NavigationBar_HeaderViewButton")
+        if node is None:
+            return ""
+        return _ax_clean(self._attr(node, "AXDescription") or self._attr(node, "AXTitle"))
+
+    def _row_name(self, node) -> str:
+        """A row reads "Anna, ‎2 unread messages": the marked tail is WhatsApp's
+        annotation in the UI language, not part of the name."""
+        raw = str(self._attr(node, "AXTitle") or self._attr(node, "AXDescription") or "")
+        return _ax_clean(raw.split(", ‎", 1)[0])
+
+    @staticmethod
+    def _best(contact: str, rows: list) -> object | None:
+        exact = [n for n, nm in rows if fold(nm) == fold(contact)]
+        close = [n for n, nm in rows if same_contact(contact, nm)]
+        return (exact or close or [None])[0]
+
+    def _press_id(self, win, ident: str) -> bool:
+        import ApplicationServices as AS
+        node = self._find(win, ident)
+        return node is not None and AS.AXUIElementPerformAction(node, "AXPress") == 0
+
+    # ── the transport ───────────────────────────────────────────────────────
+    def open_chat(self, contact: str) -> tuple[bool, str]:
+        """Through New Chat's contact picker, not the chat-list search bar.
+        Measured: that bar keeps old text after a chat opens, ignores
+        AXSelectedTextRange, loses focus on ⌘A and, after one search, turns
+        into "Ask Meta AI" where Return would send the name to Meta AI. The
+        picker opens with an empty, focused text field every time."""
+        import ApplicationServices as AS
+        try:
+            app, win = self._window()
+            title = self._title(win)
+            if title and same_contact(contact, title):
+                return True, title                      # already open
+
+            hit = None
+            if self._press_id(win, "NavigationBar_NewChatButton"):
+                field = None
+                for _ in range(15):
+                    time.sleep(0.2)
+                    field = self._find(win, "PickerView_SearchBar")
+                    if field is not None:
+                        break
+                if field is None:
+                    return False, "WhatsApp's New Chat list did not open"
+                if self._attr(field, "AXValue"):
+                    AS.AXUIElementSetAttributeValue(field, "AXValue", "")
+                if not self._attr(field, "AXFocused"):
+                    AS.AXUIElementSetAttributeValue(field, "AXFocused", True)
+                if not self._paste(app, contact):
+                    self._press_id(win, "PickerView_CloseButton")
+                    return False, "focus left WhatsApp while searching"
+                if fold(self._attr(field, "AXValue")) != fold(contact):
+                    self._press_id(win, "PickerView_CloseButton")
+                    return False, "the name did not land in WhatsApp's search field"
+                deadline = time.time() + _seconds(settings().get("chat_wait"), 6.0)
+                while time.time() < deadline and hit is None:
+                    time.sleep(0.4)
+                    rows = [(n, self._row_name(n)) for n, r, _nm, i in self._walk(win, budget_s=2.0)
+                            if i == "PickerView_ContactCell" and r == "AXButton"]
+                    hit = self._best(contact, rows)
+                if hit is None:
+                    self._press_id(win, "PickerView_CloseButton")
+                    time.sleep(0.4)
+
+            if hit is None:
+                # Groups are not in the contact picker; the chat list shows the
+                # recent ones.
+                rows = [(n, self._row_name(n)) for n, r, _nm, i in self._walk(win)
+                        if r == "AXButton" and not i and self._row_name(n)]
+                hit = self._best(contact, rows)
+            if hit is None:
+                return False, f"no contact or recent chat called {contact} in WhatsApp"
+
+            AS.AXUIElementPerformAction(hit, "AXPress")
+            title = ""
+            deadline = time.time() + _seconds(settings().get("chat_wait"), 6.0)
+            while time.time() < deadline:
+                time.sleep(0.3)
+                title = self._title(win)
+                if title and same_contact(contact, title):
+                    break
+            if self._find(win, "PickerView_SearchBar") is not None:
+                self._press_id(win, "PickerView_CloseButton")
+            if not title:
+                return False, "the conversation header could not be read"
+            return True, title
+        except Exception as e:
+            return False, str(e)
+
+    def send_text(self, message: str) -> tuple[bool, str]:
+        import ApplicationServices as AS
+        try:
+            app, win = self._window(launch=False)
+            box = self._find(win, "ChatBar_ComposerTextView")
+            if box is None:
+                return False, "no message box in the open conversation"
+            if _ax_clean(self._attr(box, "AXValue")):
+                AS.AXUIElementSetAttributeValue(box, "AXValue", "")   # a leftover draft
+                time.sleep(0.2)
+            if not self._click(app, box):
+                AS.AXUIElementSetAttributeValue(box, "AXFocused", True)
+            time.sleep(0.25)
+            if not self._attr(box, "AXFocused"):
+                return False, "the message box did not take the keyboard"
+            if not self._paste(app, message):
+                return False, "the keyboard left WhatsApp before the message was typed"
+            typed = str(self._attr(box, "AXValue") or "").replace("\r", "")
+            if typed.strip() != message.replace("\r", "").strip():
+                AS.AXUIElementSetAttributeValue(box, "AXValue", "")
+                return False, "the text did not land in the message box"
+            # The mic button turns into Send once there is text. Pressing it
+            # through Accessibility needs no keyboard focus; a synthetic Return
+            # is measured NOT to reach this box, so it is only the fallback.
+            if not self._press_id(win, "ChatBar_SendButton"):
+                if not self._frontmost(app):
+                    return False, "the keyboard left WhatsApp with the message typed but unsent"
+                self._key(36)                             # Return
+            for _ in range(16):
+                time.sleep(0.25)
+                if not str(self._attr(box, "AXValue") or "").strip():
+                    return True, ""
+            return False, "Return did not send it — the message is still in the box"
+        except Exception as e:
+            return False, str(e)
+
+    def _header_buttons(self, win) -> list[tuple[str, str, object]]:
+        return [(nm, i, n) for n, r, nm, i in self._walk(win)
+                if r == "AXButton" and i.startswith("NavigationBar_") and nm]
+
+    def call(self, kind: str = "voice") -> tuple[bool, str]:
+        import ApplicationServices as AS
+        try:
+            _app, win = self._window(launch=False)
+            buttons = self._header_buttons(win)
+            want = "NavigationBar_VideoCallButton" if kind == "video" else "NavigationBar_CallButton"
+            pick = next(((nm, n) for nm, i, n in buttons if i == want), None)
+            if pick is None:
+                names = [nm for nm, _, _ in buttons]
+                ctl = classify_controls(names, need=kind).get(kind)
+                pick = next(((nm, n) for nm, _, n in buttons if nm == ctl), None) if ctl else None
+            if pick is None:
+                return False, (f"no {kind}-call button in this chat (header offers: "
+                               f"{', '.join(nm for nm, _, _ in buttons) or 'nothing'})")
+            err = AS.AXUIElementPerformAction(pick[1], "AXPress")
+            return (True, pick[0]) if err == 0 else (False, f"'{pick[0]}' could not be pressed")
+        except Exception as e:
+            return False, str(e)
+
+    def hangup(self) -> tuple[bool, str]:
+        import ApplicationServices as AS
+        try:
+            app = self._app_el()
+            if app is None:
+                return False, "WhatsApp is not running"
+            items = self._walk(app, budget_s=4.0)
+            end = next((n for n, r, nm, i in items if i == "end_call"
+                        and self._attr(n, "AXEnabled")), None)
+            if end is None:
+                names = [nm for _n, r, nm, _i in items if r == "AXButton" and nm]
+                ctl = classify_controls(names, need="end").get("end")
+                end = next((n for n, r, nm, _i in items if r == "AXButton" and nm == ctl), None) if ctl else None
+            if end is None:
+                return False, "no call is in progress in WhatsApp"
+            err = AS.AXUIElementPerformAction(end, "AXPress")
+            return (True, "End Call") if err == 0 else (False, "the hang-up control could not be pressed")
+        except Exception as e:
+            return False, str(e)
+
+    def diagnose(self) -> tuple[bool, str]:
+        try:
+            _app, win = self._window(launch=True)
+        except Exception as e:
+            return False, str(e)
+        title = self._title(win)
+        if not title:
+            return False, "no conversation is open — click any normal chat and press CHECK again"
+        ids = {i for _, i, _ in self._header_buttons(win)}
+        if not ({"NavigationBar_CallButton", "NavigationBar_VideoCallButton"} & ids):
+            return False, f"'{title}' is open but it shows no call buttons"
+        return True, f"WhatsApp found; '{title}' is open and its call buttons were found"
+
+
+def _mac_app_installed() -> bool:
+    try:
+        import AppKit
+        return AppKit.NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(
+            _MAC_BUNDLE) is not None
+    except Exception:
+        return Path("/Applications/WhatsApp.app").exists()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  choosing a transport
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -787,7 +1169,26 @@ def _web() -> tuple[Transport | None, str]:
         return _cache["web"], ""
 
 
+def _mac_desktop() -> tuple[Transport | None, str]:
+    missing = [m for m in ("ApplicationServices", "Quartz", "AppKit", "pyautogui", "pyperclip")
+               if not installed(m)]
+    if missing:
+        return None, ("the macOS desktop transport needs pyobjc — pip install "
+                      "pyobjc-framework-ApplicationServices pyautogui pyperclip")
+    if not _mac_app_installed():
+        return None, "the WhatsApp desktop app is not installed (get it from the Mac App Store)"
+    with _cache_lock:
+        if "mac" not in _cache:
+            try:
+                _cache["mac"] = MacDesktop()
+            except Exception as e:
+                return None, f"could not load that transport: {e}"
+        return _cache["mac"], ""
+
+
 def _desktop() -> tuple[Transport | None, str]:
+    if _OS == "Darwin":
+        return _mac_desktop()
     if _OS != "Windows":
         return None, ("there is no WhatsApp desktop driver for this system — switch the WhatsApp "
                       "transport to 'web' in settings")
@@ -810,7 +1211,10 @@ def get() -> tuple[Transport | None, str]:
         return _web()
     if choice == "desktop":
         return _desktop()
-    if _OS == "Windows":
+    if _OS in ("Windows", "Darwin"):
+        # The desktop app the user already has open beats a second WhatsApp
+        # session in a browser (which needs its own QR link and a network
+        # round-trip to load before it can do anything).
         t, why = _desktop()
         if t is not None:
             return t, ""

@@ -86,6 +86,14 @@ wmi;        sys_platform == "win32"
 # game_updater (Steam's install dialog).
 pywinauto;  sys_platform == "win32"
 
+# ── macOS-only (pip skips these automatically on Windows / Linux) ─────────────
+# The macOS accessibility tree — the Mac counterpart of pywinauto above.
+# core/screenview.py reads it for app_control and the screen agent, and the
+# WhatsApp pair drives the WhatsApp desktop app through it. Without these,
+# every app_control call on a Mac fails with "no accessibility package".
+pyobjc-framework-ApplicationServices; sys_platform == "darwin"
+pyobjc-framework-Quartz;              sys_platform == "darwin"
+
 # ── Documents, media & hardware readouts ──────────────────────────────────────
 # Also try/except-guarded at the point of use. They are declared because a
 # feature that silently does nothing is worse than a slightly longer install.
@@ -139,5 +147,6 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 # yourself with:  pip install openwakeword
 #
 # macOS / Linux OS actions (volume, brightness, reminders) shell out to native
-# tools (pactl / brightnessctl / osascript / systemd), so no extra Python
-# packages are needed there — nothing Windows-specific is ever pulled in.
+# tools (pactl / brightnessctl / osascript / systemd); the only macOS-specific
+# packages are the pyobjc accessibility pair above — nothing Windows-specific
+# is ever pulled in.
