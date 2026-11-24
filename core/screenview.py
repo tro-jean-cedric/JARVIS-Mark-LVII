@@ -876,7 +876,26 @@ def _foreground_windows() -> tuple[str, str, int, Any]:
 
 
 def _foreground_mac() -> tuple[str, str, int, Any]:
-    from AppKit import NSWorkspace
+    from AppKit import NSRunningApplication, NSWorkspace
+
+    # NSWorkspace.frontmostApplication is refreshed by notifications delivered
+    # to the MAIN run loop; read from a worker thread it can lag behind a
+    # switch — measured: it still said WhatsApp after Telegram was raised, so
+    # app_control reported "Telegram did not come to the front". The system-
+    # wide AX "focused application" is answered live by the window server.
+    if _HAS_PYOBJC:
+        try:
+            import ApplicationServices as AS
+            err, focused = AS.AXUIElementCopyAttributeValue(
+                AS.AXUIElementCreateSystemWide(), "AXFocusedApplication", None)
+            if err == 0 and focused is not None:
+                err, pid = AS.AXUIElementGetPid(focused, None)
+                if err == 0 and pid:
+                    ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+                    name = str(ra.localizedName() or "") if ra is not None else ""
+                    return name, "", int(pid), int(pid)
+        except Exception:
+            pass
 
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     if app is None:

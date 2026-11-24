@@ -950,15 +950,50 @@ def focus(match: "Match") -> bool:
             return False
 
     if _OS == "Darwin":
+        # "set frontmost" answers success and still leaves some apps behind —
+        # measured: Telegram would not come up over WhatsApp, every time. So
+        # the result is CHECKED, and when it did not land, LaunchServices
+        # (`open` on the app's bundle) does it: that always activates the
+        # running copy and reopens its window.
+        def _front_pid() -> int:
+            try:
+                from core import screenview
+                return screenview.foreground_pid()
+            except Exception:
+                return 0
+
+        def _landed() -> bool:
+            for _ in range(8):
+                if _front_pid() == match.pid:
+                    return True
+                time.sleep(0.15)
+            return False
+
         try:
-            r = subprocess.run(
+            subprocess.run(
                 ["osascript", "-e",
                  f'tell application "System Events" to set frontmost of the '
                  f'first process whose unix id is {match.pid} to true'],
                 capture_output=True, timeout=5)
-            return r.returncode == 0
         except Exception:
-            return False
+            pass
+        if _landed():
+            return True
+        try:
+            import AppKit
+            ra = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(match.pid)
+            bundle = ra.bundleURL().path() if ra is not None and ra.bundleURL() else ""
+        except Exception:
+            bundle = ""
+        if bundle:
+            try:
+                r = subprocess.run(["open", bundle], capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    print(f"[appidentity] open {bundle!r} failed: {(r.stderr or '').strip()}")
+            except Exception as exc:
+                print(f"[appidentity] open {bundle!r} failed: {exc}")
+            return _landed()
+        return False
 
     # Linux. There is no single API here — X11 window management is whatever
     # the user installed — so the two tools nearly every desktop ships are
