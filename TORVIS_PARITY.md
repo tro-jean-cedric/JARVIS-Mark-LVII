@@ -65,7 +65,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | pushup_counter | Count push-ups live via webcam, session history | ✅ | MediaPipe pose elbow angle if installed, else face-dip tracking with hysteresis |
 | face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | ✅ | SFace enroll/lock/unlock(PIN)/forget; main.py mic callback is gated while locked; lock-at-start via `on_startup` |
 | gesture_control | Webcam hand gestures: stop talking, tracks, volume, yes/no | ✅ | Full set with `pip install mediapipe`; without it only swipe + open palm |
-| holo_desk | Full-screen camera view with hand-controlled floating panels | 🟡 | Camera picture + Pillow-drawn panels on the HUD, swipe/palm control. No full-screen window, pinch-drag needs mediapipe; big-HUD hook pending (wave 2) |
+| holo_desk | Full-screen camera view with hand-controlled floating panels | 🟡 | Camera picture + Pillow-drawn panels on the HUD, swipe/palm control. Shown in the large HUD area (`player.show_hud_frame`). No full-screen window or fling/clap/panel-ring gestures; pinch-drag needs mediapipe |
 | home_assistant | Tuya / Smart Life light: on/off, colour, brightness, scenes | ✅ | Local (tinytuya) **or** your own Tuya cloud project; ~20 moods. Untested on a real bulb |
 | printer_control | 3D printer over LAN (status, pause, temps, fans, light) | ✅ | Bambu (MQTT/TLS), OctoPrint, Moonraker; stop behind confirm; progress announcements. Camera = snapshot, not live stream. Untested on a real printer |
 | shop_assistant | Find real prices/stock/delivery across shops, add to cart (never buy) | 🟡 | Search → page extraction (JSON-LD/meta/text) → model check; baskets; Playwright add-to-cart that blocks checkout/pay. Missing: variant choice, comparison-site follow-through, price tracking |
@@ -98,14 +98,15 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | Feature | Status | Notes |
 |---|---|---|
 | Moments ("when I say I'm home, do …" / at a time) | ➖ | JARVIS `routines` + `core/routines` |
-| Morning brief shaped by voice | ⬜ | |
-| Weekly "what I did for you" recap | ⬜ | built on action_history |
-| "Things to say" suggestions under the head / First steps | ⬜ | |
-| Plugin manager: add own plugin with hash approval, REVIEW on change | ⬜ | |
+| Morning brief shaped by voice | ✅ | `core/briefing.py`: parts weather/calendar/reminders/email/news/focus, language, news topic/region, city; parts fetched in parallel and skipped when no data; `routines` tool `add_parts`/`remove_parts` |
+| Weekly "what I did for you" recap | ✅ | `core/recap.py` + built-in routine (Sunday 18:00): week summary from action_history + one untried feature |
+| "Things to say" suggestions under the head / First steps | 🟡 | Clickable chips under the head (`core/suggest.py`, local, no model call); First steps overlay with 6 steps ticked on real success (`core/first_steps.py`). Steps are fixed, not tailored per country/browser |
+| Plugin manager: add own plugin with hash approval, REVIEW on change | ✅ | "+ ADD PLUGIN" → warning → APPROVE; `user_plugins/` (git-ignored); SHA-256 of plugin + helpers checked before import; starts OFF; REVIEW / ✕ |
 | Suggest a feature / Report a problem | ⛔ | Sends to Torvis's developer |
-| Phone via Telegram bot (own BotFather token) | ⬜ | via telegram_remote |
-| Phone control safety (confirm risky steps on phone) | ⬜ | via telegram_remote |
-| Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | ⬜ | |
+| Phone via Telegram bot (own BotFather token) | ✅ | `plugins/telegram_remote.py` |
+| Phone control safety (confirm risky steps on phone) | ✅ | Two-step Yes/No buttons on the phone for `core.confirm` requests from a phone turn |
+| Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | 🟡 | `actions/remote_mode.py` + `core/remote_mode.py`: keep awake, lock when idle, screen off, hibernate (confirm), WoL info/setup/send; phone `/awake`, `/hibernate`. No settings panel (voice/phone only); "lock when screen off" is idle-based; no smart-plug or sleep-then-self-wake flow |
+| Shared webcam for HUD preview + plugins | ✅ | `gui/window.py` camera preview now uses `plugins/_camera.py` |
 | Subscription, plans, allowance, trial, signed auto-update, relay | ⛔ | Torvis commercial service |
 | Interface in 10 languages | ⛔ | Not requested |
 
@@ -115,3 +116,19 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 - 2026-11-24 — Shared `plugins/_announce.py` (speak later / plugin JSON storage in `memory/plugin_data/`).
 - 2026-11-24 — Fixed `.gitignore`: trailing comments had disabled the patterns for `config/api_keys.json`, `config/certs/`, `config/whatsapp_web/`, `**/token*.json`, `**/client_secret*.json`. Note: `config/certs/jarvis.key` is in git history (commit 067f528) — regenerate the dashboard certificate if the repo is public.
 - 2026-11-24 — Google plugins done; shared OAuth in `plugins/_google_core.py`, token in `config/token_google.json` (git-ignored).
+- 2026-11-24 — All 33 missing Torvis plugins and 6 missing actions added (productivity, Google, Telegram/cloud/WhatsApp, vision, webcam watchers, devices/web/screen agent, HUD panels).
+- 2026-11-24 — Wave 2: main.py hooks (face-lock mic gate, `on_app_ready` start-up), briefing by voice, weekly recap, suggestion chips + First steps, user plugins with hash approval, Remote Mode, shared HUD camera. AGENTS.md + manual updated for user plugins.
+
+## Totals (2026-11-24)
+
+- Plugins: 34 added — 24 ✅, 10 🟡 (disk_map, build_guide, video_summarizer, holo_desk, whatsapp_call, cloud_agent, shop_assistant, connected_apps, planet_watch, live_subtitles); 4 already in JARVIS.
+- Actions: 6 added — 5 ✅, 1 🟡 (window_control) — plus the new `remote_mode` action.
+- App-level: 6 ✅, 2 🟡, 1 ➖ (Moments), 3 ⛔ (Torvis's own commercial services / feedback channel / 10-language UI).
+- Nothing in JARVIS is gated by a licence, plan, allowance or trial.
+
+## Not verified on real hardware/accounts (needs a person)
+
+Real Google account (Gmail/Calendar/subscriptions), Telegram bot, WhatsApp
+calls, Tuya bulb, 3D printer, screen-agent clicking, shop add-to-cart on a live
+shop, loopback audio for subtitles, webcam accuracy (posture, push-ups,
+gestures, face lock), Windows/Linux window control.

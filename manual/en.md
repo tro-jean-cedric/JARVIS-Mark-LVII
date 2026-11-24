@@ -143,16 +143,24 @@ transcribed and translated, so subtitles trail the speech by a few seconds.
 
 ## Plugins
 
-A plugin is one Python file in `plugins/`. Every plugin found there is enabled
-automatically; switch any off in ⚙ Setup → PLUGINS, and fill in the ones that
-need an account or address (Gmail, Telegram, smart lights, printers…) in
-⚙ Setup → PLUGIN SETTINGS. Plugins in this release include: pomodoro, water
-reminders, shopping list, flashcards (spaced repetition), quiz, Excel writer,
-Obsidian vault, disk map, Gmail, Google Calendar, subscription radar, Telegram
-remote, calorie counter, fridge chef, paper reminders, document review, video
-summariser, posture guard, push-up counter, face lock, gesture control, holo
-desk, home lights (Tuya / Smart Life), 3D printer control, visual panel, live
-panels and live subtitles. Ask "what can the X plugin do?" for details.
+A plugin is one Python file. The ones that come with the assistant (in
+`plugins/`) are enabled automatically; switch any off in ⚙ Setup → PLUGINS, and
+fill in the ones that need an account or address (Gmail, Telegram, smart lights,
+printers…) in ⚙ Setup → PLUGIN SETTINGS. Plugins in this release include:
+pomodoro, water reminders, shopping list, flashcards (spaced repetition), quiz,
+Excel writer, Obsidian vault, disk map, Gmail, Google Calendar, subscription
+radar, Telegram remote, cloud agent, WhatsApp calls, calorie counter, fridge
+chef, paper reminders, build guide, document review, video summariser, posture
+guard, push-up counter, face lock, gesture control, holo desk, home lights
+(Tuya / Smart Life), 3D printer control, shopping assistant, connected apps
+(MCP), screen agent, planet watch, visual panel, live panels and live
+subtitles. Ask "what can the X plugin do?" for details.
+
+Your own plugins: in the Plugin Manager press "+ ADD PLUGIN", pick the .py file,
+read the warning and APPROVE. It is listed as "added by you" and starts OFF.
+A plugin runs with your own permissions and can do anything you can — only add
+ones you wrote or fully trust. If the file (or a helper it came with) changes
+afterwards, it stops running until you REVIEW and approve it again.
 
 ## Settings: where things are
 

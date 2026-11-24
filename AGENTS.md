@@ -66,9 +66,22 @@ A plugin is one file `plugins/<name>.py` (no leading underscore) with:
 Helper modules may live beside it with a leading underscore
 (`plugins/_helper.py`); the loader skips those. See `plugins/_template.py`.
 
-A new plugin is **enabled automatically** the moment its file exists — nothing
-needs to be registered or switched on. Never edit `config/api_keys.json` to
-"enable" one; that file holds the user's API keys and settings.
+A new **bundled** plugin (a file in `plugins/`) is **enabled automatically** the
+moment its file exists — nothing needs to be registered or switched on. Never
+edit `config/api_keys.json` to "enable" one; that file holds the user's API keys
+and settings.
+
+Plugins the **user** adds through the Plugin Manager ("+ ADD PLUGIN") live in
+`user_plugins/` (git-ignored), start OFF, and load only while the file and every
+helper it came with still match the SHA-256 recorded when the user approved it
+(`core/plugin_loader.py`: `check_user_plugin`). A changed file is listed for
+REVIEW and never imported. Do not write into `user_plugins/` or its approval
+records yourself.
+
+Shared helpers available to plugins: `plugins/_announce.py` (speak later from a
+thread via `player.request_say`, small JSON store in `memory/plugin_data/`) and
+`plugins/_camera.py` (one shared webcam stream; never open your own
+`cv2.VideoCapture`).
 
 ## Asking a model for something
 
