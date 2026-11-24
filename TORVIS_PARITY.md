@@ -63,7 +63,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | video_summarizer | Any video/audio link or file → summary / Q&A / key points | 🟡 | YouTube transcript → yt-dlp captions → audio to model; local files via ffmpeg. "Video on screen" read from the address bar by the model |
 | posture_guard | Webcam posture watch + 20-20-20 eye breaks | ✅ | YuNet (auto-downloaded from opencv_zoo) or Haar fallback; calibrates 6 s; lean/slump/tilt with 1-min persistence + cooldowns |
 | pushup_counter | Count push-ups live via webcam, session history | ✅ | MediaPipe pose elbow angle if installed, else face-dip tracking with hysteresis |
-| face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | 🟡 | Enroll/lock/unlock(PIN)/forget work (SFace). **Mic gating + lock-at-start hook in main.py pending** (wave 2) |
+| face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | ✅ | SFace enroll/lock/unlock(PIN)/forget; main.py mic callback is gated while locked; lock-at-start via `on_startup` |
 | gesture_control | Webcam hand gestures: stop talking, tracks, volume, yes/no | ✅ | Full set with `pip install mediapipe`; without it only swipe + open palm |
 | holo_desk | Full-screen camera view with hand-controlled floating panels | 🟡 | Camera picture + Pillow-drawn panels on the HUD, swipe/palm control. No full-screen window, pinch-drag needs mediapipe; big-HUD hook pending (wave 2) |
 | home_assistant | Tuya / Smart Life light: on/off, colour, brightness, scenes | ⬜ | |
