@@ -1998,8 +1998,18 @@ class JarvisLive:
         )
 
     async def _send_realtime(self):
+        # 0.1 s of digital silence. While the microphone sends nothing — muted,
+        # a video playing, Face Lock, push-to-talk not held — Live closes the
+        # session with 1008 "client inactivity", and every reconnect loses the
+        # conversation's context (observed: three closes in a minute). Silence
+        # carries nothing from the room, so this keeps the session without
+        # sending a sound.
+        keepalive = {"data": bytes(int(SEND_SAMPLE_RATE * 0.1) * 2), "mime_type": "audio/pcm"}
         while True:
-            msg = await self.out_queue.get()
+            try:
+                msg = await asyncio.wait_for(self.out_queue.get(), timeout=8.0)
+            except asyncio.TimeoutError:
+                msg = keepalive
             # Gemini 3.x Live rejects the old realtime_input.media_chunks field
             # (what `media=...` maps to) and closes the socket with a 1007. Send
             # mic / phone PCM through the new `audio` field instead. Queue items
