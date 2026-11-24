@@ -281,6 +281,10 @@ class Transport:
         """(ok, chat title or reason, latest messages oldest-first) of the open chat."""
         return False, "this transport cannot read conversations", []
 
+    def unread(self) -> tuple[bool, str, list[tuple[str, int, str]]]:
+        """(ok, reason, [(chat, unread count, last-message preview)])."""
+        return False, "this transport cannot list unread chats", []
+
     def send_message_to(self, receiver: str, message: str) -> tuple[bool, str]:
         """Open the right conversation, prove it is the right one, type, send,
         and check the box emptied. (sent, failure-reason)."""
@@ -1173,6 +1177,27 @@ class MacDesktop(Transport):
         bubbles = [nm for _n, _r, nm, i in self._walk(win)
                    if i == "WAMessageBubbleTableViewCell" and nm]
         return True, title, [b[:400] for b in bubbles[-max(1, limit):]]
+
+    def unread(self) -> tuple[bool, str, list[tuple[str, int, str]]]:
+        """(name, unread count, last-message preview) for the chats in the list
+        that carry an unread badge. Only rows WhatsApp has loaded — the top of
+        the list, which is where unread chats sort."""
+        try:
+            _app, win = self._window(launch=True)
+        except Exception as e:
+            return False, str(e), []
+        lst = self._find(win, "ChatListView_TableView")
+        if lst is None:
+            return False, "WhatsApp's chat list is not showing", []
+        out = []
+        for n, _r, _nm, _i in self._walk(lst):
+            raw = str(self._attr(n, "AXTitle") or self._attr(n, "AXDescription") or "")
+            m = re.search(r",\s*‎(\d+)\s", raw)     # "Ali, ‎3 unread messages"
+            if not m:
+                continue
+            preview = _ax_clean(str(self._attr(n, "AXValue") or "").replace("‎", ""))
+            out.append((self._row_name(n), int(m.group(1)), preview[:220]))
+        return True, "", out
 
 
 def _mac_app_installed() -> bool:

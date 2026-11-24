@@ -50,6 +50,9 @@ PLUGIN = {
                                       "guide's CHECK) and rings nobody; 'read' returns the latest "
                                       "messages of a chat (contact given) or of the chat open now."},
             "limit": {"type": "INTEGER", "description": "For read: how many recent messages (default 12)."},
+            "unread": {"type": "BOOLEAN", "description": "For read with no contact: list the chats "
+                                                         "with unread messages and their last message "
+                                                         "('summarise my unread WhatsApp messages')."},
             "confirm": {"type": "BOOLEAN",
                         "description": "Only true after the tool reported a different contact than asked "
                                        "for AND the user agreed to call that person."},
@@ -146,6 +149,14 @@ def _run(p: dict, player) -> str:
                 return out.failed("whatsapp_call", f"{who}'s chat could not be opened ({title})")
             if not wa.same_contact(who, title):
                 return out.failed("whatsapp_call", f"the chat that opened is '{title}', not {who}'s")
+        if not who and str(p.get("unread")).lower() in ("true", "1", "yes"):
+            ok, why2, rows = transport.unread()
+            if not ok:
+                return out.failed("whatsapp_call", why2)
+            body = ("Unread WhatsApp chats (name — unread count — last message):\n"
+                    + ("\n".join(f"- {n} — {c} — {pv}" for n, c, pv in rows)
+                       or "(no unread chats)"))
+            return out.untrusted("whatsapp_unread", body)
         ok, title, msgs = transport.read_messages(int(p.get("limit") or 12))
         if not ok:
             return out.failed("whatsapp_call", title)
