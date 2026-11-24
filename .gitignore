@@ -48,3 +48,6 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── Plugin data (shopping list, flashcards, history...) ─────────────────────
+memory/plugin_data/
