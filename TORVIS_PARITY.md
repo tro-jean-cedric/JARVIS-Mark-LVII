@@ -72,9 +72,9 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | connected_apps | Work inside connected services (Notion, GitHub…) via MCP | ⬜ | |
 | screen_agent | Mouse/keyboard task agent driven by the screen | ⬜ | |
 | planet_watch | Globe/map with earthquakes, disasters, aurora, aircraft | ⬜ | |
-| visual_panel | Show tables, charts, big numbers, checklists, countdowns on the HUD | ⬜ | |
-| live_panels | Live interactive panels (system diagnostics, weather board) | ⬜ | |
-| live_subtitles | Live translated subtitles of computer audio in an overlay bar | ⬜ | |
+| visual_panel | Show tables, charts, big numbers, checklists, countdowns on the HUD | ✅ | PIL board in the HUD palette: text/stats/list/table/bars/line/pie/progress/checklist/countdown/image/gallery. Ticking a checklist is by voice (it's a picture) |
+| live_panels | Live interactive panels (system diagnostics, weather board) | ✅ | System (psutil, 3 s refresh) and weather (Open-Meteo, no key) |
+| live_subtitles | Live translated subtitles of computer audio in an overlay bar | 🟡 | New `gui/subtitles.py` bar + `player.show_subtitle`. Needs a loopback device (WASAPI/Stereo Mix, Pulse monitor, BlackHole on macOS); capture untested |
 | code_helper | Code help | ➖ | `actions/code_helper.py` |
 | dev_agent | Coding agent | ➖ | `actions/dev_agent.py` |
 | flight_finder | Flight search | ➖ | `actions/flight_finder.py` |
@@ -85,12 +85,12 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 
 | Action | What it does | Status | Notes |
 |---|---|---|---|
-| world_time | Exact time in any city/country incl. DST | ⬜ | |
-| persona | Persistent character: how to address the user, tone, humour, length | ⬜ | |
-| action_history | Week-long log of what the assistant did; "what did you do yesterday?" | ⬜ | |
-| window_control | Windows by app name: min/max/snap/focus/move monitor/list/close others/per-app volume | ⬜ | |
-| app_control | Operate an app through its accessibility interface | ⬜ | |
-| assistant_help | Assistant's own manual + diagnose | ⬜ | |
+| world_time | Exact time in any city/country incl. DST | ✅ | ~350-place table + Open-Meteo geocoding; time conversion between places |
+| persona | Persistent character: how to address the user, tone, humour, length | ✅ | `[PERSONA]` block added to the system prompt (main.py `_build_config`); undoable |
+| action_history | Week-long log of what the assistant did; "what did you do yesterday?" | ✅ | Recorded in main.py `_execute_tool` (no content, whitelisted params only); `[RECENT ACTIONS]` in prompt |
+| window_control | Windows by app name: min/max/snap/focus/move monitor/list/close others/per-app volume | 🟡 | Windows full (per-app volume via pycaw); macOS via System Events without move_to_monitor; Linux X11 via wmctrl/xdotool, not Wayland |
+| app_control | Operate an app through its accessibility interface | ✅ | list/press/read/type via screenview/screenact; model risk check → confirm; never types into password fields |
+| assistant_help | Assistant's own manual + diagnose | ✅ | New `manual/en.md` written for JARVIS; diagnose shows live state |
 | open_app, browser_control, computer_control, computer_settings, desktop, file_controller, file_processor, reminder, routines, proactive, send_message, system_monitor, video_player, weather_report, web_search, screen_processor, background_tasks, background_monitor | — | ➖ | Already in JARVIS |
 
 ## App-level features (release notes / manual)
