@@ -9,6 +9,7 @@ main Gemini Live session; there is no separate vision session here.
 from __future__ import annotations
 
 import io
+import subprocess
 import json
 import sys
 from pathlib import Path
@@ -92,6 +93,45 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
 _ASKED_SCREEN_ACCESS = False
 
 
+def _launcher_name() -> str:
+    """The program macOS holds responsible for this process — the one the
+    user must switch on in Privacy & Security. Walks the parent processes for
+    the first .app bundle (Terminal, iTerm, PyCharm...); else the outermost
+    non-shell program. The model otherwise told the user to enable "the JARVIS
+    app", which does not exist in that list."""
+    try:
+        import os
+        import psutil
+        proc, outer = psutil.Process(os.getpid()), ""
+        while proc is not None and proc.pid > 1:
+            exe = ""
+            try:
+                exe = proc.exe()
+            except Exception:
+                pass
+            if ".app/" in exe:
+                return exe.split(".app/")[0].rsplit("/", 1)[-1]
+            base = exe.rsplit("/", 1)[-1]
+            if base and base not in ("zsh", "bash", "sh", "fish", "login") and not base.startswith("python"):
+                outer = exe
+            proc = proc.parent()
+        if outer:
+            return outer.replace(os.path.expanduser("~"), "~")
+    except Exception:
+        pass
+    return "Terminal (or the app you started JARVIS from)"
+
+
+def _open_screen_recording_settings() -> None:
+    for url in ("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"):
+        try:
+            if subprocess.run(["open", url], capture_output=True, timeout=5).returncode == 0:
+                return
+        except Exception:
+            pass
+
+
 def _capture_without_own_windows_mac() -> bytes | None:
     """The main display as it looks WITHOUT the assistant's own windows.
 
@@ -137,11 +177,15 @@ def _capture_screen() -> tuple[bytes, str]:
                 if not _ASKED_SCREEN_ACCESS:
                     _ASKED_SCREEN_ACCESS = True
                     Quartz.CGRequestScreenCaptureAccess()   # macOS shows its prompt once
+                    _open_screen_recording_settings()
+                who = _launcher_name()
                 raise RuntimeError(
-                    "macOS has not given Screen Recording permission to the app JARVIS runs from, "
-                    "so a screenshot shows only the wallpaper and JARVIS's own window - no other "
-                    "app. Allow it in System Settings > Privacy & Security > Screen & System Audio "
-                    "Recording (for Terminal, or whichever app started JARVIS), then restart JARVIS.")
+                    "macOS has not given Screen Recording permission, so a screenshot shows only "
+                    "the wallpaper and JARVIS's own window - no other app. The System Settings page "
+                    "'Privacy & Security > Screen & System Audio Recording' has been opened: the user "
+                    f"must switch on '{who}' there (there is NO entry called JARVIS; if '{who}' is "
+                    "missing, add it with +), then restart JARVIS. This is NOT the Accessibility "
+                    "list. To judge a web page without the screen, use web_search mode='read'.")
         except RuntimeError:
             raise
         except Exception:

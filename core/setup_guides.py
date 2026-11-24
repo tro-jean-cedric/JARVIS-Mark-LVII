@@ -283,18 +283,31 @@ GUIDES: dict[str, dict] = {
     },
 
     # ── Screen agent / app control ──────────────────────────────────────────
+    "screen_recording": {
+        "title": "Screen Recording (let the assistant see your screen)",
+        "aliases": ["screen recording", "enregistrement de l'écran", "enregistrement d'écran",
+                    "enregistrement", "screenshot", "capture d'écran", "see my screen", "voir l'écran",
+                    "screen capture", "recording permission", "screen permission"],
+        "time": "about 1 minute",
+        "need": "macOS. Without it every screenshot shows only the wallpaper and the assistant's own window.",
+        "steps": [
+            "System Settings → Privacy & Security → Screen & System Audio Recording (NOT Accessibility).",
+            "Switch on the program that started the assistant — Terminal if you use run_jarvis.command. "
+            "There is no entry called JARVIS. Missing? Press + and add it.",
+            "Quit and restart the assistant: macOS applies this permission only to a new start.",
+        ],
+        "done": "Say \"what's on my screen?\" — it now sees every app, without its own window in the way.",
+    },
+
     "screen_agent": {
         "title": "Screen agent (clicks and types for you)",
-        "aliases": ["screen agent", "click", "mouse", "keyboard", "accessibility", "permissions",
-                    "screen recording"],
+        "aliases": ["screen agent", "click", "mouse", "keyboard", "accessibility", "accessibilité"],
         "time": "about 1 minute",
         "steps": [
             "Mac: System Settings → Privacy & Security → Accessibility: switch on the app that runs "
             "the assistant (Terminal, PyCharm or Python).",
             "Mac: in the same place, Screen & System Audio Recording: switch it on too, then restart "
             "the assistant.",
-            "Mac (optional, more precise): pip install pyobjc-framework-ApplicationServices — lets it "
-            "see buttons by name instead of only by picture.",
             "Press CHECK WHAT I CAN SEE, switch to any window within 5 seconds: it reports what it "
             "can see and clicks nothing.",
         ],

@@ -345,6 +345,46 @@ def _compare(items: list[str], aspect: str) -> str:
 from core import outcome
 
 
+def _read_page(address: str) -> str:
+    """One web page's own content — title, description, headings, text — for
+    'what do you think of this site?'. The page was otherwise only reachable
+    through a screenshot, which on a Mac without Screen Recording permission
+    showed nothing (observed with the user's own site)."""
+    import re as _re
+    import requests
+    from bs4 import BeautifulSoup
+    url = address.strip().strip("<>").strip()
+    if not _re.match(r"^https?://", url, _re.I):
+        url = "https://" + url
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+    try:
+        r = requests.get(url, timeout=12, headers=headers)
+    except requests.exceptions.SSLError:
+        r = requests.get("http://" + url.split("://", 1)[1], timeout=12, headers=headers)
+    if r.status_code >= 400:
+        raise RuntimeError(f"{url} answered HTTP {r.status_code}")
+    soup = BeautifulSoup(r.text, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    desc = ""
+    m = soup.find("meta", attrs={"name": "description"})
+    if m and m.get("content"):
+        desc = m["content"].strip()
+    heads = [h.get_text(" ", strip=True) for h in soup.find_all(["h1", "h2", "h3"])][:15]
+    text = " ".join(soup.get_text(" ", strip=True).split())
+    out = [f"Page: {r.url}", f"Title: {title or '(none)'}"]
+    if desc:
+        out.append(f"Description: {desc}")
+    if heads:
+        out.append("Headings: " + " | ".join(h for h in heads if h))
+    out.append(f"Text ({len(text)} chars): {text[:3500]}")
+    if len(text) < 200:
+        out.append("(Very little text: the site may build its content with JavaScript.)")
+    return "\n".join(out)
+
+
 def web_search(
     parameters:     dict,
     response=None,
@@ -377,6 +417,8 @@ def web_search(
             found = _research(query)
         elif mode == "price":
             found = _price(query)
+        elif mode == "read":
+            found = _read_page(query)
         else:
             found = _search(query)
 
@@ -402,7 +444,7 @@ def web_search(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "web_search",
-    "description": "Searches the web. Use for ANY question about current facts, events, prices, or topics — always prefer this over guessing. Modes: 'search' (default), 'news' (latest headlines on a topic), 'research' (deep comprehensive answer), 'price' (product cost lookup), 'compare' (side-by-side comparison of items).",
+    "description": "Searches the web. Use for ANY question about current facts, events, prices, or topics — always prefer this over guessing. Modes: 'search' (default), 'news' (latest headlines on a topic), 'research' (deep comprehensive answer), 'price' (product cost lookup), 'compare' (side-by-side comparison of items), 'read' (query = a web address: returns that page's own title, description, headings and text - use it to look at or judge a specific site, no screenshot needed).",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -412,7 +454,7 @@ TOOL = {
             },
             "mode": {
                 "type": "STRING",
-                "description": "search | news | research | price | compare"
+                "description": "search | news | research | price | compare | read"
             },
             "items": {
                 "type": "ARRAY",

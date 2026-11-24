@@ -457,7 +457,13 @@ def _is_own_echo(heard: str, said: str) -> bool:
         return True
     import difflib
     sm = difflib.SequenceMatcher(None, h, said, autojunk=False)
-    matched = sum(b.size for b in sm.get_matching_blocks() if b.size >= 4)
+    blocks = sm.get_matching_blocks()
+    # Short phrases must repeat one STRETCH of what we said: scattered words
+    # matched a real reply — "J'utilise depuis PyCharm" right after the
+    # assistant had said "utilisez" and "PyCharm" — and it was thrown away.
+    if len(h) < 40:
+        return max((b.size for b in blocks), default=0) >= 0.8 * len(h)
+    matched = sum(b.size for b in blocks if b.size >= 8)
     return matched / len(h) >= 0.7
 
 

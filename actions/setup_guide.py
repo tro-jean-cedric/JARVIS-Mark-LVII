@@ -26,6 +26,22 @@ def _live_status(key: str) -> str:
     QR-code steps do not apply, but read as a list they sent the model (and the
     user) hunting for a QR code that never appears. Cheap: names the transport,
     never touches the WhatsApp window."""
+    if key == "screen_recording":
+        try:
+            import Quartz
+            from actions import screen_processor as sp
+            if Quartz.CGPreflightScreenCaptureAccess():
+                return ("status=already_set_up -- Screen Recording is ALREADY allowed; the assistant "
+                        "can see the screen. Nothing to do.")
+            sp._open_screen_recording_settings()
+            who = sp._launcher_name()
+            return (f"status=opened_settings program=\"{who}\" -- The System Settings page 'Privacy & "
+                    f"Security > Screen & System Audio Recording' is now OPEN on the user's screen. Tell "
+                    f"them: switch on '{who}' in that list (there is no entry called JARVIS; if it is "
+                    f"missing, press + and add it), then restart the assistant. This is NOT the "
+                    f"Accessibility list - do not send them there.")
+        except Exception:
+            return ""
     if key != "whatsapp_call":
         return ""
     try:
