@@ -773,6 +773,7 @@ class JarvisLive:
         # until the user says or types something.
         self._briefing_started = 0.0
         self._briefing_until = 0.0
+        self._go_away_pending = False   # server asked us to reconnect (time limit)
         self._said_fold = ""           # recent words we spoke, folded (echo check)
         self._said_at = 0.0
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
@@ -2287,6 +2288,22 @@ class JarvisLive:
                     # keepalive all count.
                     self._clear_stall()
 
+                    # GoAway: the session is about to hit its time limit and the
+                    # server asks us to reconnect. Ignored, it cut the session
+                    # with 1008 "client failed to close the connection after
+                    # receiving a GoAway". Reconnect keeping the context — now if
+                    # we are silent, else as soon as the current answer ends.
+                    if getattr(response, "go_away", None) is not None and not self._go_away_pending:
+                        self._go_away_pending = True
+                        print(f"[JARVIS] Server GoAway (time left "
+                              f"{getattr(response.go_away, 'time_left', '?')}) — reconnecting")
+                        if not self._is_speaking:
+                            self.request_reconnect(keep_context=True, reason="server GoAway")
+                    if (self._go_away_pending and not self._is_speaking
+                            and getattr(getattr(response, "server_content", None),
+                                        "turn_complete", False)):
+                        self.request_reconnect(keep_context=True, reason="server GoAway")
+
                     # ── Session resumption ───────────────────────────────────
                     # The server sends this periodically. `resumable` goes false
                     # while a turn is mid-flight — replaying a handle from that
@@ -3141,6 +3158,7 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
+                    self._go_away_pending = False     # a fresh session has its own clock
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
