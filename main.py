@@ -2294,6 +2294,7 @@ class JarvisLive:
                                     full_out = ""
                             if full_out:
                                 self._last_out_logged = full_out
+                                print(f"[JARVIS] 💬 {self._asst_name}: {full_out[:300]}")
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
                                 if self._dashboard:
