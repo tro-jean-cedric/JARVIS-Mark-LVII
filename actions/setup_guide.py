@@ -19,6 +19,29 @@ def _first_step(g: dict) -> str:
     return s[0] if isinstance(s, (tuple, list)) else str(s)
 
 
+def _live_status(key: str) -> str:
+    """What this machine actually uses, when that makes the guide moot.
+
+    The WhatsApp guide covers two routes. With the desktop app installed the
+    QR-code steps do not apply, but read as a list they sent the model (and the
+    user) hunting for a QR code that never appears. Cheap: names the transport,
+    never touches the WhatsApp window."""
+    if key != "whatsapp_call":
+        return ""
+    try:
+        from plugins import _whatsapp_core as wa
+        transport, _why = wa.get()
+    except Exception:
+        return ""
+    if transport is None or "desktop" not in transport.label.lower():
+        return ""
+    return (f"status=already_set_up via=\"{transport.label}\" -- WhatsApp is ALREADY usable: the "
+            "signed-in desktop app on this computer is driven directly. There is NO QR code to "
+            "scan and nothing to link or configure; ignore the WhatsApp Web steps. Tell the user "
+            "that, and that they can simply ask to send a message or call someone. To test it, "
+            "call whatsapp_call with action='check'.")
+
+
 def setup_guide(parameters: dict, player=None) -> str:
     try:
         topic = str((parameters or {}).get("topic") or "").strip()
@@ -45,6 +68,9 @@ def setup_guide(parameters: dict, player=None) -> str:
                 pass
         where = ("in ⚙ PLUGIN SETTINGS under " + guide["title"].split(" —")[0]
                  if key in setup_guides.GUIDES else "by voice and in SETUP")
+        live = _live_status(key)
+        if live:
+            return live
         return (f"status=shown guide=\"{guide['title']}\" steps={len(guide.get('steps', []))} "
                 f"time=\"{guide.get('time', '')}\" first_step=\"{_first_step(guide)}\" "
                 f"settings_location=\"{where}\" -- The full steps with links are on screen now "
