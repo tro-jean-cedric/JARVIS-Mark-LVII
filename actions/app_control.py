@@ -49,7 +49,8 @@ def _view(app: str):
         time.sleep(0.45)
     view = screenview.look(allow_ocr=False)
     if view.pid and screenview.is_own_pid(view.pid):
-        return None, "there is no app window to act on (the assistant's own are never touched)"
+        return None, ("the assistant's own window is in front and is never operated - call again "
+                      "with 'app' set to the application to use (e.g. app='Telegram')")
     if app and label:
         from core.appidentity import fold
         a, b = fold(view.app.rsplit(".", 1)[0]), fold(label)
