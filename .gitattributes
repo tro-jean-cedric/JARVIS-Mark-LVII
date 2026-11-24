@@ -1,0 +1,6 @@
+# Windows batch files must keep CRLF line endings to run reliably in cmd.exe,
+# whatever line-ending settings the person committing has.
+*.bat text eol=crlf
+# The macOS / Linux launchers must keep LF, or bash fails with "\r: command not found".
+*.sh      text eol=lf
+*.command text eol=lf
