@@ -487,10 +487,13 @@ TOOL_DECLARATIONS = [
     {
         "name": "shutdown_jarvis",
         "description": (
-            "Shuts down the assistant completely. "
-            "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
-            "The user can say this in ANY language."
+            "Closes the assistant app completely. Call it ONLY when the user clearly "
+            "asks for the assistant itself to be closed, quit or shut down (e.g. "
+            "'shut down', 'close yourself', 'quit Jarvis', 'goodbye, close the app'), "
+            "in ANY language. NOT for: 'stop' / 'stop talking' (just stop speaking), "
+            "stopping music, a video, a timer or another tool, 'thanks', 'that's all', "
+            "a plain 'bye' at the end of an answer, or anything said in an earlier "
+            "session. If unsure, ask first."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -706,6 +709,11 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+        # Only REAL input sets this — words of the user transcribed, or a typed /
+        # phone command — never a reset at start or on wake. shutdown_jarvis
+        # checks it: a session that resumes with an old "goodbye" in its context,
+        # or a noise heard as "stop", must not close the app on its own.
+        self._last_user_input_at = 0.0
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
@@ -1369,6 +1377,7 @@ class JarvisLive:
         if self._wake_enabled and not self._awake:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
+        self._last_user_input_at = time.monotonic()   # real input (see shutdown_jarvis)
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -1834,6 +1843,16 @@ class JarvisLive:
                 else:
                     result = "Specify action (add/remove/list) and a topic."
 
+            elif name == "shutdown_jarvis" and (
+                    time.monotonic() - self._last_user_input_at > 30):
+                # Nothing was said or typed in the last 30 s: this is a resumed
+                # session acting on an old goodbye, or noise heard as "stop".
+                # Closing the app is not something to do on a guess.
+                print("[JARVIS] shutdown_jarvis refused — no recent user input")
+                result = ("status=refused reason=\"the user has not said or typed anything just "
+                          "now\" -- Do NOT close. Carry on normally; if they want to close the "
+                          "assistant they will say so.")
+
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
@@ -2195,6 +2214,7 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+                                self._last_user_input_at = self._last_user_speech
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -3192,15 +3212,44 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+# Set when shutdown was asked for from another thread (shutdown_jarvis): main()
+# then exits with this code and skips the wrap-up, which already ran.
+_EXIT_REQUESTED = None
+
+
 def _exit_process(code: int = 0) -> None:
     """End the process on purpose, after the atexit handlers.
 
     A normal interpreter exit waits on every worker thread still inside a tool —
     a plugin loop, a long download — so the window could close while the process
     stayed behind. The atexit handlers still run first: plugins hand things back
-    there (cloud_agent returns Telegram to the server)."""
+    there (cloud_agent returns Telegram to the server).
+
+    It must run on the MAIN (Qt) thread. Called from the voice loop's thread —
+    shutdown_jarvis — the exit handlers tore Qt objects down from the wrong
+    thread ("Timers cannot be stopped from another thread") and the process
+    died with a segmentation fault. So from any other thread this only asks Qt
+    to quit; main() then comes back here on the main thread. If Qt does not
+    respond in time, the process is ended without the handlers."""
     import atexit
     import os as _os
+    global _EXIT_REQUESTED
+    if threading.current_thread() is not threading.main_thread():
+        _EXIT_REQUESTED = code
+        try:
+            from PyQt6.QtCore import QCoreApplication, QMetaObject, Qt
+            app = QCoreApplication.instance()
+            if app is not None:
+                QMetaObject.invokeMethod(app, "quit", Qt.ConnectionType.QueuedConnection)
+                time.sleep(8)          # main() exits the process long before this
+        except Exception as e:
+            print(f"[JARVIS] clean exit request failed: {e!r}")
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        _os._exit(code)
     try:
         atexit._run_exitfuncs()
     except Exception:
@@ -3228,6 +3277,11 @@ def main():
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()
+
+    # Asked to quit by shutdown_jarvis: it already said goodbye, wrote the
+    # summary and stopped the engines — just leave, from this (main) thread.
+    if _EXIT_REQUESTED is not None:
+        _exit_process(_EXIT_REQUESTED)
 
     # The window is closed: write the session summary, stop the engines, go.
     jarvis = holder.get("jarvis")
