@@ -42,14 +42,14 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 
 | Plugin | What it does | Status | Notes |
 |---|---|---|---|
-| pomodoro | Focus/break timer, speaks at transitions, daily focus stats | ⬜ | |
-| water_reminder | Interval water reminders + daily intake vs goal | ⬜ | |
-| shopping_list | Persistent shopping list by voice | ⬜ | |
-| spaced_repetition | Flashcard deck with SM-2 style scheduling, AI-generated cards | ⬜ | |
-| quiz | On-screen quiz on any topic / uploaded document | ⬜ | |
-| excel_writer | Spoken description → real .xlsx (headers, totals, chart) on Desktop | ⬜ | |
-| obsidian_vault | Read / search / write / daily notes in an Obsidian vault | ⬜ | |
-| disk_map | What takes space on a drive/folder, drill down, never deletes | ⬜ | |
+| pomodoro | Focus/break timer, speaks at transitions, daily focus stats | ✅ | Long break every 4th block; per-task minutes |
+| water_reminder | Interval water reminders + daily intake vs goal | ✅ | Understands ml/cl/l/glasses/cups/oz; quiet 23:00–07:00 |
+| shopping_list | Persistent shopping list by voice | ✅ | Clear/remove are undoable (core/undo) rather than confirmed |
+| spaced_repetition | Flashcard deck with SM-2 style scheduling, AI-generated cards | ✅ | Named decks; cards from a topic or the uploaded document |
+| quiz | On-screen quiz on any topic / uploaded document | ✅ | `show_quiz`; built-in fallback when the model returns nothing |
+| excel_writer | Spoken description → real .xlsx (headers, totals, chart) on Desktop | ✅ | Real Desktop (OneDrive/XDG aware), SUM row, bar/line/pie chart |
+| obsidian_vault | Read / search / write / daily notes in an Obsidian vault | ✅ | Auto-detects vault; writes undoable; never deletes |
+| disk_map | What takes space on a drive/folder, drill down, never deletes | 🟡 | Full scan/focus/up as a text report in the content panel; Torvis's clickable HUD treemap not built |
 | gmail_control | Check, read, search, send, draft Gmail (OAuth) | ✅ | Send behind confirm; mark_read undoable. Needs your own Google "Desktop app" OAuth client (⚙ → Plugin settings → Google) |
 | calendar_control | Read Google Calendar, create events (OAuth) | ✅ | agenda/next/search/add; natural dates (ISO → model → rule parser); local TZ; add is undoable |
 | subscription_radar | Find paid subscriptions from Gmail receipts, monthly total | ✅ | Background scan (≤400 mails/12 months), model + rule fallback, per-currency monthly total, renewal reminders |
