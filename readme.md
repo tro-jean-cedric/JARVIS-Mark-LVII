@@ -801,6 +801,27 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 
 ## ⚡ Quick Start
 
+### One click
+
+| System | Double-click |
+|---|---|
+| macOS | `run_jarvis.command` |
+| Windows | `run_jarvis.bat` |
+| Linux | `run_jarvis.sh` (allow "Run as program" in its properties, or run `./run_jarvis.sh`) |
+
+…or from any terminal: `python3 run.py`.
+
+The first start creates a private environment in `.venv/`, installs everything
+for your OS (it runs `setup.py` for you) and opens JARVIS — a few minutes, once.
+After that it starts in seconds, and only reinstalls when `requirements.txt`
+changes. `python3 run.py --setup` prepares without starting;
+`python3 run.py --reinstall` rebuilds the environment from scratch.
+
+> macOS may say the file "can't be opened because it is from an unidentified
+> developer" the first time: right-click it → **Open** → **Open**. It asks once.
+
+### By hand
+
 ```bash
 git clone https://github.com/FatihMakes/Mark-LVII.git
 cd Mark-LVII
