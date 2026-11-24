@@ -26,7 +26,8 @@ PLUGIN = {
     "description": (
         "Places a WHATSAPP CALL to one of the user's contacts, or ends the call in progress. Use when "
         "the user wants to call, ring, phone or video call somebody — 'call Yusuf on WhatsApp', 'ring "
-        "mum', 'video call my brother', 'hang up', 'end the call'. Put the name as saved in their phone "
+        "mum', 'video call my brother', 'hang up', 'end the call'. Also READS a WhatsApp chat: 'read my "
+        "conversation with Ali', 'what did she write?' -> action='read' (never Gmail for WhatsApp). Put the name as saved in their phone "
         "into 'contact', without possessives ('call my dude' -> contact 'dude'). call_type defaults to "
         "'voice'. Do NOT use send_message for this — that only types a text. If this tool reports that "
         "a different conversation opened than the one asked for, do not retry silently: ask the user, "
@@ -43,10 +44,12 @@ PLUGIN = {
                                        "Not needed for action='hangup'."},
             "call_type": {"type": "STRING", "enum": ["voice", "video"],
                           "description": "'voice' (default) or 'video'."},
-            "action": {"type": "STRING", "enum": ["call", "hangup", "check"],
+            "action": {"type": "STRING", "enum": ["call", "hangup", "check", "read"],
                        "description": "'call' (default) rings the contact; 'hangup' ends the call in "
                                       "progress; 'check' tests that WhatsApp can be reached (the setup "
-                                      "guide's CHECK) and rings nobody."},
+                                      "guide's CHECK) and rings nobody; 'read' returns the latest "
+                                      "messages of a chat (contact given) or of the chat open now."},
+            "limit": {"type": "INTEGER", "description": "For read: how many recent messages (default 12)."},
             "confirm": {"type": "BOOLEAN",
                         "description": "Only true after the tool reported a different contact than asked "
                                        "for AND the user agreed to call that person."},
@@ -130,6 +133,24 @@ def _run(p: dict, player) -> str:
     if action == "hangup":
         threading.Thread(target=_hangup_worker, daemon=True, name="whatsapp-hangup").start()
         return out.started("whatsapp_call", action="hangup")
+    if action == "read":
+        # Reading changes nothing, so no confirmation. Without this the model
+        # answered "read the conversation" with Gmail.
+        transport, why = wa.get()
+        if transport is None:
+            return out.failed("whatsapp_call", f"I can't reach WhatsApp on this system: {why}")
+        who = wa.clean_contact(p.get("contact") or "")
+        if who:
+            ok, title = transport.open_chat(who)
+            if not ok:
+                return out.failed("whatsapp_call", f"{who}'s chat could not be opened ({title})")
+            if not wa.same_contact(who, title):
+                return out.failed("whatsapp_call", f"the chat that opened is '{title}', not {who}'s")
+        ok, title, msgs = transport.read_messages(int(p.get("limit") or 12))
+        if not ok:
+            return out.failed("whatsapp_call", title)
+        body = f"Chat: {title}\n" + ("\n".join(f"- {m}" for m in msgs) or "(no messages on screen)")
+        return out.untrusted("whatsapp_messages", body)
 
     contact = wa.clean_contact(p.get("contact") or "")
     if not contact:

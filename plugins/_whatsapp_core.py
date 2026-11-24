@@ -277,6 +277,10 @@ class Transport:
     def diagnose(self) -> tuple[bool, str]:
         return False, "this transport has no self-check"
 
+    def read_messages(self, limit: int = 12) -> tuple[bool, str, list[str]]:
+        """(ok, chat title or reason, latest messages oldest-first) of the open chat."""
+        return False, "this transport cannot read conversations", []
+
     def send_message_to(self, receiver: str, message: str) -> tuple[bool, str]:
         """Open the right conversation, prove it is the right one, type, send,
         and check the box emptied. (sent, failure-reason)."""
@@ -1154,6 +1158,21 @@ class MacDesktop(Transport):
             return True, (f"WhatsApp found and messages work; '{title}' shows no call buttons, "
                           f"so open a contact's chat to check calls")
         return True, f"WhatsApp found; '{title}' is open, messages and call buttons work"
+
+    def read_messages(self, limit: int = 12) -> tuple[bool, str, list[str]]:
+        """The messages WhatsApp currently has on screen in the open chat. Each
+        bubble's accessibility label already says who and when ("Your message,
+        On my way, 17:35, Sent to …" / "message, Ok, 18:38, Received from …")."""
+        try:
+            _app, win = self._window(launch=True)
+        except Exception as e:
+            return False, str(e), []
+        title = self._title(win)
+        if not title:
+            return False, "no conversation is open in WhatsApp", []
+        bubbles = [nm for _n, _r, nm, i in self._walk(win)
+                   if i == "WAMessageBubbleTableViewCell" and nm]
+        return True, title, [b[:400] for b in bubbles[-max(1, limit):]]
 
 
 def _mac_app_installed() -> bool:
