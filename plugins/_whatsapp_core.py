@@ -122,6 +122,9 @@ def clean_contact(spoken: str) -> str:
     text = str(spoken or "").strip().strip("\"'")
     text = re.sub(r"^(?:call|ring|phone|video\s*call)\s+", "", text, flags=re.I)
     text = re.sub(r"^(?:my|our|the)\s+", "", text, flags=re.I)
+    # "+" belongs to phone numbers only; the model has put it before names
+    # ("+trojeancedric"), which then matched no contact.
+    text = re.sub(r"^\+(?=\s*[^\d\s])", "", text.strip())
     return text.strip()
 
 
