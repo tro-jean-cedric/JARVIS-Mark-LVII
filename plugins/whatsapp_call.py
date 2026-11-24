@@ -168,7 +168,9 @@ def _run(p: dict, player) -> str:
         return out.failed("whatsapp_call", "this version has no confirmation gate, so nothing is dialled")
 
     def dial() -> str:
-        return _dial(transport, contact, kind, force)
+        result = _dial(transport, contact, kind, force)
+        print(f"[WhatsApp] {kind} call to {contact!r}: {result}")   # the console's only trace of it
+        return result
 
     title = f"WhatsApp {kind} call to {contact}"
     return confirm.request("whatsapp_call", title,
