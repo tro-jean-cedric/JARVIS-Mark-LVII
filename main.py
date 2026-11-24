@@ -1884,13 +1884,23 @@ class JarvisLive:
                     angle     = args.get("angle", "screen").lower()
                     user_text = args.get("text", "What do you see?")
                     if angle == "camera":
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                        try:
+                            img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                        except Exception:
+                            self._vision_busy = False
+                            raise
                         self.ui.start_camera_stream()
                         self._vision_cam_active = True
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
                     else:
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
+                        try:
+                            img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
+                        except Exception as e:
+                            # Cleared here: left set, every later look at the
+                            # screen was refused as "still processing".
+                            self._vision_busy = False
+                            raise RuntimeError(f"the screen could not be captured: {e}") from e
                         print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
                         _stall = "screen"
                     self._pending_vision = (img_b, mime_t, user_text, angle)

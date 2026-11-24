@@ -89,7 +89,66 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
         return img_bytes, f"image/{source_format.lower()}"
 
 
+_ASKED_SCREEN_ACCESS = False
+
+
+def _capture_without_own_windows_mac() -> bytes | None:
+    """The main display as it looks WITHOUT the assistant's own windows.
+
+    The HUD floats over whatever the user asked about — measured: a 980×728
+    window in the middle of a full-screen Telegram — so a plain screenshot was
+    mostly the assistant's own interface and it answered "I only see my own
+    window". Quartz composites the listed windows only, so everything else on
+    screen is captured as if the HUD were not there. None = use mss."""
+    try:
+        import Quartz
+        import AppKit
+        from core import screenview
+        opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        infos = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
+        ids = [int(w["kCGWindowNumber"]) for w in infos
+               if not screenview.is_own_pid(int(w.get("kCGWindowOwnerPID", 0) or 0))]
+        if not ids:
+            return None
+        bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
+        img = Quartz.CGWindowListCreateImageFromArray(bounds, ids, Quartz.kCGWindowImageDefault)
+        if img is None or Quartz.CGImageGetWidth(img) == 0:
+            return None
+        rep = AppKit.NSBitmapImageRep.alloc().initWithCGImage_(img)
+        data = rep.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+        return bytes(data) if data is not None else None
+    except Exception as e:
+        print(f"[Vision] ⚠️  capture without own windows failed ({e}) — plain screenshot")
+        return None
+
+
 def _capture_screen() -> tuple[bytes, str]:
+
+    if _get_os() == "mac":
+        # Without Screen Recording permission macOS still hands back a
+        # "screenshot" — the wallpaper, the menu bar and our own windows, every
+        # other app blanked. The assistant then honestly reported it could see
+        # only its own interface, with an open Telegram right there. Say why
+        # instead of sending that picture.
+        try:
+            import Quartz
+            if not Quartz.CGPreflightScreenCaptureAccess():
+                global _ASKED_SCREEN_ACCESS
+                if not _ASKED_SCREEN_ACCESS:
+                    _ASKED_SCREEN_ACCESS = True
+                    Quartz.CGRequestScreenCaptureAccess()   # macOS shows its prompt once
+                raise RuntimeError(
+                    "macOS has not given Screen Recording permission to the app JARVIS runs from, "
+                    "so a screenshot shows only the wallpaper and JARVIS's own window - no other "
+                    "app. Allow it in System Settings > Privacy & Security > Screen & System Audio "
+                    "Recording (for Terminal, or whichever app started JARVIS), then restart JARVIS.")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        png = _capture_without_own_windows_mac()
+        if png:
+            return _compress(png, "PNG")
 
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")
