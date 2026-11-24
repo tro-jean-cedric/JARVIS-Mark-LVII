@@ -21,6 +21,20 @@ Source analysed: **Torvis v0.6.3** (`infos/Torvis-x86_64.AppImage`, Linux x86_64
   hosted GPU models, "cloud body") is a service, not app code, and is listed as
   out of scope below.
 
+## Licensing
+
+In Torvis, what a licence/plan gates is **use of its hosted servers**: voice
+credits per rolling 5-hour and 30-day window, a computers-per-licence limit, a
+one-time free trial, and "needs an active subscription" for connected apps and
+the phone (cloud). No feature is locked in the desktop app itself beyond that.
+
+In JARVIS **every feature below is available unconditionally** — there is no
+licence, plan, allowance, trial or device check anywhere. The work Torvis does
+on its paid servers runs here on the user's own Gemini key / configured
+provider (`core.gemini`), the user's own accounts (Google, Telegram bot), and
+JARVIS's own self-hosted cloud (`core/cloud.py`). Torvis's binary itself was
+not patched or bypassed.
+
 Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 ⬜ to do · ➖ already in JARVIS · ⛔ out of scope
 
@@ -36,9 +50,9 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | excel_writer | Spoken description → real .xlsx (headers, totals, chart) on Desktop | ⬜ | |
 | obsidian_vault | Read / search / write / daily notes in an Obsidian vault | ⬜ | |
 | disk_map | What takes space on a drive/folder, drill down, never deletes | ⬜ | |
-| gmail_control | Check, read, search, send, draft Gmail (OAuth) | ⬜ | |
-| calendar_control | Read Google Calendar, create events (OAuth) | ⬜ | |
-| subscription_radar | Find paid subscriptions from Gmail receipts, monthly total | ⬜ | |
+| gmail_control | Check, read, search, send, draft Gmail (OAuth) | ✅ | Send behind confirm; mark_read undoable. Needs your own Google "Desktop app" OAuth client (⚙ → Plugin settings → Google) |
+| calendar_control | Read Google Calendar, create events (OAuth) | ✅ | agenda/next/search/add; natural dates (ISO → model → rule parser); local TZ; add is undoable |
+| subscription_radar | Find paid subscriptions from Gmail receipts, monthly total | ✅ | Background scan (≤400 mails/12 months), model + rule fallback, per-currency monthly total, renewal reminders |
 | telegram_remote | Control the PC from the user's own Telegram bot; push screenshots/status | ⬜ | |
 | whatsapp_call | Place / end a WhatsApp (video) call to a contact | ⬜ | |
 | calorie_counter | Food on webcam → calories & macros | ⬜ | |
@@ -65,7 +79,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | dev_agent | Coding agent | ➖ | `actions/dev_agent.py` |
 | flight_finder | Flight search | ➖ | `actions/flight_finder.py` |
 | game_updater | Steam/game updates | ➖ | `actions/game_updater.py` |
-| cloud_agent | Torvis "cloud body": repeating phone reminders, briefings, sync, export | ⛔ | Needs Torvis's hosted server |
+| cloud_agent | "Cloud body": repeating phone reminders, briefings, sync, export | ⬜ | Targets JARVIS's own self-hosted `core/cloud.py`, not Torvis's servers |
 
 ## Built-in actions (Torvis `actions/*.py`)
 
@@ -98,3 +112,5 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 ## Log
 
 - 2026-11-24 — Inventory extracted; shared webcam helper `plugins/_camera.py` added.
+- 2026-11-24 — Shared `plugins/_announce.py` (speak later / plugin JSON storage in `memory/plugin_data/`).
+- 2026-11-24 — Google plugins done; shared OAuth in `plugins/_google_core.py`, token in `config/token_google.json` (git-ignored).
