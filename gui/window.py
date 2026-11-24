@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    # Live subtitles (plugins/live_subtitles.py): a line of text + a short hint
+    # (the language), and hiding the bar. See gui/subtitles.py.
+    _subtitle_sig      = pyqtSignal(str, str)
+    _subtitle_hide_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -415,6 +419,9 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._subtitle_sig.connect(self._show_subtitle)
+        self._subtitle_hide_sig.connect(self._hide_subtitles)
+        self._subtitle_bar = None            # created on first use
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -583,6 +590,9 @@ class MainWindow(QMainWindow):
                 p.setSource(QUrl())
         self._video_split = False
         self._video_kind = "image"
+        # Which file is on show, so a plugin refreshing its own board (visual
+        # panels, live panels) can tell it is still the one being displayed.
+        self._image_source = str(path)
         # Silence first: a video whose sound was on has the microphone closed,
         # and the picture replacing it must hand the microphone back.
         self._set_video_muted(True)
@@ -771,11 +781,36 @@ class MainWindow(QMainWindow):
             else:
                 self._video_sync.start()
 
+    # ------------------------------------------------------------------
+    # Live subtitles — a separate always-on-top bar (gui/subtitles.py)
+    # ------------------------------------------------------------------
+    def _show_subtitle(self, text: str, hint: str) -> None:
+        try:
+            if self._subtitle_bar is None:
+                from gui.subtitles import SubtitleBar
+                self._subtitle_bar = SubtitleBar()
+            self._subtitle_bar.set_line(text, hint)
+        except Exception as e:
+            self._log.append_log(f"SYS: subtitles could not be shown — {e}")
+
+    def _hide_subtitles(self) -> None:
+        if self._subtitle_bar is not None:
+            self._subtitle_bar.closed_by_user = False
+            self._subtitle_bar.hide()
+
+    def subtitles_visible(self) -> bool:
+        """False once the bar is hidden or the user closed it with its ✕.
+        A plain attribute read, safe from any thread."""
+        bar = self._subtitle_bar
+        return bool(bar is not None and bar.shown and not bar.closed_by_user)
+
     def video_state(self) -> dict:
         """What is on the display: kind ('video' | 'image' | ''), position and
         duration in seconds, paused. Safe to read from any thread."""
         kind = getattr(self, "_video_kind", "") if self._video_on else ""
         return {"kind": kind,
+                # The picture's file path while a still picture is shown.
+                "source": getattr(self, "_image_source", "") if kind == "image" else "",
                 "position": getattr(self, "_video_pos_ms", 0) / 1000.0,
                 "duration": getattr(self, "_video_dur_ms", 0) / 1000.0,
                 "paused": bool(getattr(self, "_video_paused", False))}

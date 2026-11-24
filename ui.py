@@ -337,6 +337,24 @@ class JarvisUI:
         """
         self._win._image_open_sig.emit(str(path or ""), str(title or ""))
 
+    def show_subtitle(self, text: str, hint: str = "") -> None:
+        """Thread-safe: put one subtitle line in the floating subtitle bar
+        (gui/subtitles.py), creating and showing the bar if needed. `hint` is
+        the small label in its corner, e.g. the target language."""
+        self._win._subtitle_sig.emit(str(text or "")[:400], str(hint or "")[:40])
+
+    def hide_subtitles(self) -> None:
+        """Thread-safe: take the subtitle bar off the screen."""
+        self._win._subtitle_hide_sig.emit()
+
+    def subtitles_visible(self) -> bool:
+        """Whether the subtitle bar is on screen. False after the user closed
+        it with its ✕ — the subtitle plugin stops listening then."""
+        try:
+            return bool(self._win.subtitles_visible())
+        except Exception:
+            return False
+
     def stop_video(self) -> None:
         """Thread-safe: close the video and give the HUD back to the avatar."""
         self._win._video_close_sig.emit()

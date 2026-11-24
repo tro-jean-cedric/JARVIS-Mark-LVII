@@ -1463,6 +1463,18 @@ class JarvisLive:
         })
 
         parts = [time_ctx, identity_ctx]
+        # [PERSONA] — the user's standing wishes about how the assistant should
+        # be (actions/persona.py), and [RECENT ACTIONS] — the last few tool calls
+        # from its own week-long record (actions/action_history.py). Both are
+        # optional extras: any failure here leaves the prompt as it was.
+        for _mod, _fn in (("actions.persona", "prompt_block"),
+                          ("actions.action_history", "recent_block")):
+            try:
+                _block = getattr(__import__(_mod, fromlist=[_fn]), _fn)()
+                if _block:
+                    parts.append(_block)
+            except Exception as _e:
+                print(f"[JARVIS] {_mod} block skipped: {_e}")
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
@@ -1761,6 +1773,16 @@ class JarvisLive:
         # without it the two look identical from the outside.
         print(f"[JARVIS] 📤 {name} ({(time.monotonic() - _t_tool) * 1000:.0f} ms) "
               f"→ {str(result)[:80]}")
+
+        # The assistant's own week-long record of what it did (tool, a short
+        # purpose from harmless parameters, outcome — never content). Written on
+        # a background thread by actions/action_history.py; never raises.
+        try:
+            from actions.action_history import record as _record_action
+            _record_action(name, args, str(result),
+                           (time.monotonic() - _t_tool) * 1000)
+        except Exception as _e:
+            print(f"[ActionHistory] {_e}")
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
