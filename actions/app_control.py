@@ -46,7 +46,14 @@ def _view(app: str):
         if not act.ok:
             return None, f"{app} could not be brought to the front ({act.error})"
         label = matches[0].label
-        time.sleep(0.45)
+        # Wait for the switch to land rather than a fixed beat: measured on a
+        # Mac, raising WhatsApp over Telegram took longer than the old 0.45 s
+        # and the call failed with "did not come to the front".
+        want = getattr(matches[0], "pid", 0) or 0
+        deadline = time.monotonic() + 2.5
+        time.sleep(0.2)
+        while want and time.monotonic() < deadline and screenview.foreground_pid() != want:
+            time.sleep(0.15)
     view = screenview.look(allow_ocr=False)
     if view.pid and screenview.is_own_pid(view.pid):
         return None, ("the assistant's own window is in front and is never operated - call again "
@@ -60,6 +67,14 @@ def _view(app: str):
     if not view.elements:
         return None, (view.reason or "this window shows nothing to its accessibility "
                       "interface") + " - use computer_control or the screen instead"
+    # Some apps draw everything themselves and publish only the menu bar —
+    # Telegram for macOS is one (its window has no accessibility children at
+    # all). Listing "Apple, Edit, View, Window" then read as success, and the
+    # assistant concluded it could not see the app instead of looking at it.
+    if all(el.role in ("menu", "menuitem", "window") for el in view.elements):
+        return None, (f"{view.app or 'this app'} publishes nothing but its menu bar to "
+                      "accessibility, so its contents cannot be read this way - LOOK AT THE "
+                      "SCREEN instead (screen_process), and use computer_control to click or type")
     return view, ""
 
 
