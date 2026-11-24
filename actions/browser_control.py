@@ -513,6 +513,12 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
     url = _normalize_url(url) if url and url.strip() else ""
     if url == "about:blank":
         url = ""
+    if url:
+        try:
+            from core import opened_pages
+            opened_pages.record(url)      # so "close it" can close this tab
+        except Exception:
+            pass
 
     name = None
     if browser_name:
@@ -1204,7 +1210,15 @@ def browser_control(
 
     if action == "close":
         target = browser or _registry._active_browser
-        result = _registry.close_one(target) if target else "No browser specified."
+        if target:
+            result = _registry.close_one(target)
+        else:
+            # Nothing driven by us: what the user means is the page we opened
+            # in their own browser (a video, a site) — close those tabs only.
+            from core import opened_pages
+            n, why = opened_pages.close_opened()
+            result = (outcome.done("browser_control", closed=why) if n
+                      else outcome.failed("browser_control", why))
         _log(player, result)
         return result
 
@@ -1365,7 +1379,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"
+                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all. 'close' with no browser closes the tabs YOU opened in the user's own browser (a YouTube video, a site) and nothing else of theirs"
             },
             "browser": {
                 "type": "STRING",

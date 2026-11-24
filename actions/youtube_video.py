@@ -64,6 +64,11 @@ def _get_api_key() -> str:
 
 def _open_url(url: str) -> None:
     try:
+        from core import opened_pages
+        opened_pages.record(url)          # so "close it" can close this tab
+    except Exception:
+        pass
+    try:
         if is_mac():
             subprocess.Popen(["open", url])
         elif is_linux():
