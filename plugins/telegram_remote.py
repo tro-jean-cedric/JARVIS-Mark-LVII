@@ -42,7 +42,6 @@ Settings (⚙ → TELEGRAM REMOTE): bot token, pairing code, and the switches.
 """
 from __future__ import annotations
 
-import gc
 import hmac
 import itertools
 import json
@@ -1226,28 +1225,18 @@ def _report_failure(text: str) -> None:
 #  start on launch (desktop only)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _find_ui():
-    for obj in gc.get_objects():
-        try:
-            if type(obj).__name__ == "JarvisUI":
-                return obj
-        except Exception:
-            continue
-    return None
-
-
-def _autostart() -> None:
+def on_app_ready(ui) -> None:
+    """Called once by main.py, on its own thread, when the window exists and
+    this plugin is ON. Starts the bridge if 'start on launch' is set."""
     try:
-        deadline = time.time() + 120
-        ui = None
-        while time.time() < deadline:
-            time.sleep(3)
-            ui = ui or _find_ui()
-            if ui is not None and callable(getattr(ui, "on_text_command", None)):
-                break
-        if ui is None:
+        if not (_is_desktop() and _on(_cfg(), "start_on_launch") and _token()):
             return
-        time.sleep(5)                     # let cloud_agent connect first, if it is paired
+        # on_text_command is attached just before plugins load; give the voice
+        # session a moment, and let cloud_agent connect first if it is paired.
+        deadline = time.time() + 60
+        while time.time() < deadline and not callable(getattr(ui, "on_text_command", None)):
+            time.sleep(1)
+        time.sleep(5)
         if _state.get("running"):
             return
         ca = sys.modules.get("plugins.cloud_agent")
@@ -1256,14 +1245,3 @@ def _autostart() -> None:
         print(f"[TelegramRemote] start on launch: {_start(ui)}")
     except Exception as e:
         print(f"[TelegramRemote] auto-start failed: {e}")
-
-
-def _maybe_autostart() -> None:
-    try:
-        if _is_desktop() and _on(_cfg(), "start_on_launch") and _token():
-            threading.Thread(target=_autostart, daemon=True, name="telegram-autostart").start()
-    except Exception:
-        pass
-
-
-_maybe_autostart()

@@ -86,6 +86,12 @@ from memory.config_manager     import (
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
 from core                     import gemini as _gemini
+# Face Lock's state, read by the microphone callback. Optional: without the
+# plugin's helper the microphone simply behaves as before.
+try:
+    from plugins import _face_lock_core as _face_lock
+except Exception:
+    _face_lock = None
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
@@ -706,6 +712,28 @@ class JarvisLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+
+        # Plugins that act at launch (Face Lock locking at start, the Telegram
+        # remote and the cloud link connecting on their own) get the window
+        # object here instead of hunting for it. Each runs on its own thread
+        # and a failure only costs that one plugin its start-up step.
+        def _plugin_on_ready(module_name: str, fn_name: str) -> None:
+            plugin = module_name.rsplit(".", 1)[-1]
+            try:
+                from memory.config_manager import get_plugin_enabled
+                if not (self._plugin_registry.has(plugin) and get_plugin_enabled(plugin)):
+                    return
+                import importlib
+                fn = getattr(importlib.import_module(module_name), fn_name, None)
+                if callable(fn):
+                    threading.Thread(target=fn, args=(self.ui,), daemon=True,
+                                     name=f"{plugin}-on-ready").start()
+            except Exception as e:
+                print(f"[JARVIS] {plugin} start-up step skipped: {e}")
+
+        _plugin_on_ready("plugins.face_lock", "on_startup")
+        _plugin_on_ready("plugins.telegram_remote", "on_app_ready")
+        _plugin_on_ready("plugins.cloud_agent", "on_app_ready")
 
         # Tool access for plugins that ORCHESTRATE other tools rather than doing
         # a job themselves — screen_agent is the first, and the reason this
@@ -1878,7 +1906,10 @@ class JarvisLive:
             if self._ptt_enabled and not self._ptt_held:
                 return
             
-            if not self.ui.muted and not self._phone_active:
+            # Face Lock (plugins/face_lock.py): while it is locked the
+            # microphone sends nothing until the owner's face is seen again.
+            if (not self.ui.muted and not self._phone_active
+                    and not (_face_lock is not None and _face_lock.is_locked())):
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import atexit
 import base64
-import gc
 import hashlib
 import json
 import sys
@@ -1073,42 +1072,16 @@ def _delete_cloud() -> str:
 #  connect on launch (desktop only)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _find_ui():
-    for obj in gc.get_objects():
-        try:
-            if type(obj).__name__ == "JarvisUI":
-                return obj
-        except Exception:
-            continue
-    return None
-
-
-def _autoconnect() -> None:
+def on_app_ready(ui) -> None:
+    """Called once by main.py, on its own thread, when the window exists and
+    this plugin is ON. Connects if a pairing code is saved and 'connect
+    automatically' is set."""
     try:
-        deadline, ui = time.time() + 120, None
-        while time.time() < deadline and ui is None:
-            time.sleep(3)
-            ui = _find_ui()
-        if ui is None:
+        cfg = _cfg()
+        if not (str(cfg.get("pair_code") or "").strip() and _on(cfg, "auto_connect")):
             return
-        # on_text_command is attached by main.py just before plugins load; the
-        # session itself may take a few more seconds.
+        # The voice session may take a few more seconds than the window.
         time.sleep(4)
         print(f"[CloudAgent] {_connect(ui)}")
     except Exception as e:
         print(f"[CloudAgent] auto-connect failed: {e}")
-
-
-def _maybe_autoconnect() -> None:
-    try:
-        cfg = _cfg()
-        if ("PyQt6.QtWidgets" in sys.modules and str(cfg.get("pair_code") or "").strip()
-                and _on(cfg, "auto_connect")):
-            from memory.config_manager import get_plugin_enabled
-            if get_plugin_enabled(NS):
-                threading.Thread(target=_autoconnect, daemon=True, name="cloud-autoconnect").start()
-    except Exception:
-        pass
-
-
-_maybe_autoconnect()
