@@ -1137,10 +1137,14 @@ class MacDesktop(Transport):
         title = self._title(win)
         if not title:
             return False, "no conversation is open — click any normal chat and press CHECK again"
+        if self._find(win, "ChatBar_ComposerTextView") is None:
+            return False, f"'{title}' is open but its message box could not be found"
         ids = {i for _, i, _ in self._header_buttons(win)}
         if not ({"NavigationBar_CallButton", "NavigationBar_VideoCallButton"} & ids):
-            return False, f"'{title}' is open but it shows no call buttons"
-        return True, f"WhatsApp found; '{title}' is open and its call buttons were found"
+            # e.g. "Message yourself" has none — messaging is still fine.
+            return True, (f"WhatsApp found and messages work; '{title}' shows no call buttons, "
+                          f"so open a contact's chat to check calls")
+        return True, f"WhatsApp found; '{title}' is open, messages and call buttons work"
 
 
 def _mac_app_installed() -> bool:

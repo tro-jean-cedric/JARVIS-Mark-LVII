@@ -106,9 +106,11 @@ GUIDES: dict[str, dict] = {
         "steps": [
             "Leave HOW TO REACH WHATSAPP on 'auto' (the WhatsApp desktop app on Windows and Mac "
             "if installed, otherwise WhatsApp Web). With the desktop app, sign in to it, open any "
-            "chat and press CHECK — on a Mac, allow Accessibility for the app JARVIS runs from "
-            "(System Settings → Privacy & Security → Accessibility) if asked; that is all.",
-            "WhatsApp Web only: press CHECK. A browser window opens on WhatsApp Web with a QR code.",
+            "chat and press CHECK in ⚙ → WHATSAPP CALLS (or just say \"check WhatsApp\") — on a "
+            "Mac, allow Accessibility for the app JARVIS runs from (System Settings → Privacy & "
+            "Security → Accessibility) if asked; that is all, nothing to scan.",
+            "WhatsApp Web only: press CHECK (or say \"check WhatsApp\"). A browser window opens on "
+            "WhatsApp Web with a QR code.",
             "On your phone open WhatsApp → Settings (iPhone) or the ⋮ menu (Android) → Linked "
             "devices → Link a device, and scan the QR code.",
             "Wait until your chats appear in that window. You can minimise it, but keep it open — "

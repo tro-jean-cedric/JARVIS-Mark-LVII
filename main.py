@@ -715,6 +715,10 @@ class JarvisLive:
         # or a noise heard as "stop", must not close the app on its own.
         self._last_user_input_at = 0.0
         self._last_user_text = ""      # what that input was, for the shutdown log line
+        # The startup briefing's window (see _execute_tool): no tools run in it
+        # until the user says or types something.
+        self._briefing_started = 0.0
+        self._briefing_until = 0.0
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
@@ -1752,6 +1756,23 @@ class JarvisLive:
 
         print(f"[JARVIS] 🔧 {name}  {args}")
         _t_tool = time.monotonic()
+
+        # The startup briefing is spoken on the user's behalf, before they have
+        # asked for anything, and its greeting recaps the LAST session ("earlier
+        # today the WhatsApp send failed…"). Told "do not call any tools", the
+        # live model still acted on that recap — it opened setup guides, checked
+        # remote mode and once shut the app down a minute after launch. So no
+        # tool runs during the briefing until the user has really said or typed
+        # something (or the briefing itself was configured with a task).
+        if (time.monotonic() < self._briefing_until
+                and self._last_user_input_at < self._briefing_started):
+            print(f"[JARVIS] {name} refused — called during the startup briefing, "
+                  f"before the user asked for anything")
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": (
+                "status=refused reason=\"this is the startup briefing; the user has not asked "
+                "for anything yet\" -- Do NOT act on the previous session's recap. Just finish "
+                "the briefing and wait for the user.")})
+
         self.ui.set_state("THINKING")
 
 
@@ -2511,6 +2532,12 @@ class JarvisLive:
         if self._turn_done_event:
             self._turn_done_event.clear()
 
+        # Tools stay off until the user speaks — unless the briefing was given
+        # a task of its own (`extra`), which may need them.
+        if not extra:
+            self._briefing_started = time.monotonic()
+            self._briefing_until = self._briefing_started + 60.0
+
         await self.session.send_client_content(
             turns={"role": "user", "parts": [{"text": p1}]},
             turn_complete=True,
@@ -2572,6 +2599,9 @@ class JarvisLive:
                     turn_complete=True,
                 )
                 print("[JARVIS] Briefing phase 2 (parts) sent.")
+                if self._briefing_until:
+                    # Cover the answer to phase 2, however late it was sent.
+                    self._briefing_until = max(self._briefing_until, time.monotonic() + 25.0)
             except Exception as e:
                 print(f"[Briefing] Phase 2 error: {e}")
                 print(f"[JARVIS] Briefing phase 2 failed: {e}")

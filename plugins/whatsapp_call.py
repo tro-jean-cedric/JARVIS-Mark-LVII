@@ -43,8 +43,10 @@ PLUGIN = {
                                        "Not needed for action='hangup'."},
             "call_type": {"type": "STRING", "enum": ["voice", "video"],
                           "description": "'voice' (default) or 'video'."},
-            "action": {"type": "STRING", "enum": ["call", "hangup"],
-                       "description": "'call' (default) rings the contact; 'hangup' ends the call in progress."},
+            "action": {"type": "STRING", "enum": ["call", "hangup", "check"],
+                       "description": "'call' (default) rings the contact; 'hangup' ends the call in "
+                                      "progress; 'check' tests that WhatsApp can be reached (the setup "
+                                      "guide's CHECK) and rings nobody."},
             "confirm": {"type": "BOOLEAN",
                         "description": "Only true after the tool reported a different contact than asked "
                                        "for AND the user agreed to call that person."},
@@ -118,6 +120,13 @@ def _run(p: dict, player) -> str:
         return out.failed("whatsapp_call", f"the WhatsApp driver could not load ({e})")
 
     action = str(p.get("action") or "call").strip().lower()
+    if action == "check":
+        # The settings screen's CHECK, by voice: the setup guide tells the user
+        # to press it, and without this the model went looking for a "CHECK"
+        # button inside WhatsApp. Bounded by the driver's own waits (~4 s).
+        ok, msg = _check({})
+        return (out.done("whatsapp_call", check=msg) if ok
+                else out.failed("whatsapp_call", msg))
     if action == "hangup":
         threading.Thread(target=_hangup_worker, daemon=True, name="whatsapp-hangup").start()
         return out.started("whatsapp_call", action="hangup")
