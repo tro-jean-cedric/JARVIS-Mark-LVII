@@ -1744,11 +1744,20 @@ def is_own_pid(pid: int) -> bool:
 # on all three platforms, because the answer is what stops a screen agent
 # clicking or typing into the assistant's own interface.
 # ---------------------------------------------------------------------------
+# NSWindow numbers that every "whose window is here" question must look
+# through. Air Control's overlay covers the whole screen, click-through, on a
+# normal window level: without this, window_pid_at() under it would always
+# answer "the assistant" and every guard in screenact would refuse the click
+# the user is aiming at the window BEHIND the overlay. The GUI adds the
+# overlay's number while it is shown and removes it when it closes.
+IGNORED_WINDOW_NUMBERS: set[int] = set()
+
+
 def _quartz_windows(normal_layer_only: bool = True) -> list[tuple[int, tuple]]:
     """macOS on-screen windows, front to back, as (owner pid, rect in points).
 
     Quartz answers without Accessibility permission, and in the same points the
-    mouse is driven in.
+    mouse is driven in. Windows listed in IGNORED_WINDOW_NUMBERS are skipped.
     """
     import Quartz
     options = (Quartz.kCGWindowListOptionOnScreenOnly
@@ -1757,6 +1766,9 @@ def _quartz_windows(normal_layer_only: bool = True) -> list[tuple[int, tuple]]:
     for entry in Quartz.CGWindowListCopyWindowInfo(options,
                                                    Quartz.kCGNullWindowID) or []:
         try:
+            if (IGNORED_WINDOW_NUMBERS
+                    and int(entry.get("kCGWindowNumber", 0)) in IGNORED_WINDOW_NUMBERS):
+                continue
             if normal_layer_only and int(entry.get("kCGWindowLayer", 0)) != 0:
                 continue
             if float(entry.get("kCGWindowAlpha", 1.0)) <= 0.01:

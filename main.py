@@ -130,6 +130,14 @@ try:
     from plugins import _face_lock_core as _face_lock
 except Exception:
     _face_lock = None
+
+# Dictation (core/dictation.py): while it is on, the microphone types into the
+# focused text field instead of talking to the assistant. Optional like Face
+# Lock: without it the microphone behaves exactly as before.
+try:
+    from core import dictation as _dictation
+except Exception:
+    _dictation = None
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
@@ -850,6 +858,14 @@ class JarvisLive:
                 print(f"[JARVIS] Remote Mode start skipped: {e}")
         threading.Thread(target=_remote_mode_start, daemon=True, name="remote-mode-start").start()
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        # Dictation logs "typed N characters" (never the words) and does not
+        # take a phrase while the assistant is talking over it.
+        if _dictation is not None:
+            try:
+                _dictation.attach(write_log=self.ui.write_log,
+                                  is_speaking=lambda: self._is_speaking)
+            except Exception:
+                pass
 
         # Plugins that act at launch (Face Lock locking at start, the Telegram
         # remote and the cloud link connecting on their own) get the window
@@ -2320,6 +2336,28 @@ class JarvisLive:
         loop = asyncio.get_event_loop()
 
         def callback(indata, frames, time_info, status):
+            # ── Dictation ────────────────────────────────────────────────────
+            # Checked FIRST, before the wake-word gate, so dictating works while
+            # the assistant is asleep. While it is on, the microphone belongs to
+            # the text field: nothing goes to the model, so the assistant cannot
+            # answer what is being typed. Live does not drop the session for
+            # it: _send_realtime sends its 0.1 s silence keepalive whenever the
+            # queue stays empty for 8 s. Blocks heard while the assistant talks
+            # (or its echo tail, mute, Face Lock) are dropped so its own voice
+            # is never typed. `active()` is one boolean read when it is off.
+            if _dictation is not None and _dictation.active():
+                with self._speaking_lock:
+                    speaking = self._is_speaking
+                if (speaking or self._tail_active() or self.ui.muted
+                        or (_face_lock is not None and _face_lock.is_locked())):
+                    return
+                try:
+                    _dictation.feed(indata)
+                    self.ui.set_audio_level(_pcm_level(indata))
+                except Exception:
+                    pass
+                return
+
             # ── Wake-word gate ───────────────────────────────────────────────
             # While asleep, the mic audio NEVER goes to Gemini (nothing is
             # streamed, so JARVIS can't respond to speech not addressed to it and

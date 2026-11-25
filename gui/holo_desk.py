@@ -6,11 +6,15 @@ voice tool reaches through `JarvisUI.holo_desk(cmd, **kw)`; nothing outside
 gui/ creates it.
 
 WHAT RUNS WHERE
-  worker thread  camera frames from plugins/_camera.py (the ONE shared webcam)
-                 and hand landmarks from plugins/_hands_onnx.py; it hands both
-                 to the Qt thread through `_frame_sig` and never touches a widget
-  Qt thread      a 60 fps timer: hands -> pointers (HandFilter) -> gestures
-                 (Input) -> desk physics (Desk.step) -> repaint
+  worker thread  plugins/_hand_stream.HandStream: camera frames from
+                 plugins/_camera.py (the ONE shared webcam) and hand landmarks
+                 from plugins/_hands_onnx.py; `_on_stream_frame` turns the
+                 picture into a QImage and hands both to the Qt thread through
+                 `_frame_sig` with the frame's CAPTURE time; it never touches a widget
+  Qt thread      a 60 fps timer: hands -> pointers (HandFilter, run once per NEW
+                 camera frame: running it every tick filtered the same frame
+                 twice and made the cursor move in steps) -> gestures (Input,
+                 every tick, so its timers advance) -> desk physics -> repaint
   more threads   panel content (plugins/_holo_desk_content.py) and video decoding
 
 The desk itself (plugins/_holo_desk_core.Desk) is shared with the voice tool,
@@ -19,7 +23,10 @@ which adds and removes panels from its own thread; both sides take its lock.
 MODES
   camera   the mirrored camera picture behind the panels; Esc closes
   overlay  a transparent window over the user's own programs; the mouse goes
-           to those programs ("the mouse is yours"), the hands still work
+           to those programs ("the mouse is yours"), the hands still work.
+           It never takes the focus (no activateWindow / raise_), so typing
+           keeps going where it was; macOS gets the same native set-up as Air
+           Control (gui/air_control._mac_overlay_native)
 """
 from __future__ import annotations
 
@@ -80,7 +87,9 @@ class _Sounds:
 
     SPEC = {"grab": (1500, 0.035, 0.25), "drop": (900, 0.05, 0.2), "press": (2000, 0.03, 0.25),
             "added": (1200, 0.09, 0.22), "throw": (0, 0.22, 0.25), "closed": (600, 0.12, 0.2),
-            "clap": (0, 0.30, 0.3), "restore": (1000, 0.25, 0.22), "ring": (1700, 0.12, 0.18)}
+            "clap": (0, 0.30, 0.3), "restore": (1000, 0.25, 0.22), "ring": (1700, 0.12, 0.18),
+            "tick": (2400, 0.02, 0.18), "swipe": (0, 0.18, 0.2),
+            "armed": (2000, 0.03, 0.10)}       # "press", quietly
 
     def __init__(self):
         self._fx = {}
@@ -209,7 +218,8 @@ class HoloDeskWindow(QWidget):
     _frame_sig = pyqtSignal(object, object, float)     # QImage | None, hands, time
     _status_sig = pyqtSignal(str)
 
-    def __init__(self, desk, mode: str = "camera", on_close=None, log=None):
+    def __init__(self, desk, mode: str = "camera", on_close=None, log=None,
+                 stream_factory=None):
         super().__init__(None)
         from plugins import _holo_desk_core as core
         self.core = core
@@ -223,13 +233,19 @@ class HoloDeskWindow(QWidget):
         self.frame: QImage | None = None
         self.hands: list = []
         self.hands_at = 0.0
+        self._filtered_at = 0.0                        # capture time the filter last saw
+        self._ptrs: list = []                          # the filter's last pointers
+        self._was_down: set = set()                    # pointer ids pinched last tick
+        self._crushed: set = set()                     # cards crushed, their "closed" to come
         self.mouse = None                              # Pointer or None
         self.pointers: list = []
         self.effects: list = []                        # (kind, x, y, t0, colour)
         self.status = "Starting the camera..."
         self.hint_until = time.monotonic() + 9
-        self.hint = ("Show a hand to the camera - pinch a top bar to carry a card, or a button "
-                     "below for a new one")
+        self.hint = ("Show a hand to the camera - pinch a card to carry it, a button below for "
+                     "a new one; open hand then fist closes a card")
+        self._ns_window_number = None                  # macOS overlay: see air_control
+        self.stream = None
         self.camera_error = ""
         self._images: dict = {}                        # pid -> (arg, QImage | None)
         self._videos: dict = {}                        # pid -> _Video
@@ -261,8 +277,7 @@ class HoloDeskWindow(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start(int(1000 / FPS))
         threading.Thread(target=self._lock_loop, daemon=True, name="holo-lock").start()
-        self._worker = threading.Thread(target=self._camera_loop, daemon=True, name="holo-desk")
-        self._worker.start()
+        self._start_stream(stream_factory)
         core.STATE.update(open=True, mode=self.mode, camera="", since=time.time())
 
     # ── modes ────────────────────────────────────────────────────────────────
@@ -272,82 +287,91 @@ class HoloDeskWindow(QWidget):
         geo = self.geometry() if self.isVisible() else None
         flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                  | Qt.WindowType.Tool)
-        if mode == "overlay":
-            flags |= Qt.WindowType.WindowTransparentForInput
+        overlay = mode == "overlay"
+        if overlay:
+            # Click-through and never focused: the user's programs keep the
+            # mouse and the keyboard while the hands work the desk.
+            flags |= (Qt.WindowType.WindowTransparentForInput
+                      | Qt.WindowType.WindowDoesNotAcceptFocus)
         was_visible = self.isVisible()
+        if not overlay and self._ns_window_number is not None:
+            from .air_control import _mac_overlay_restore
+            _mac_overlay_restore(self)
         self.setWindowFlags(flags)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, mode == "overlay")
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, mode == "overlay")
+        for attr in (Qt.WidgetAttribute.WA_TranslucentBackground,
+                     Qt.WidgetAttribute.WA_NoSystemBackground,
+                     Qt.WidgetAttribute.WA_ShowWithoutActivating,
+                     Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow):
+            self.setAttribute(attr, overlay)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus if overlay else Qt.FocusPolicy.StrongFocus)
         if was_visible:
+            self._show(geo)
+        self.core.STATE["mode"] = mode
+        self.update()
+
+    def _show(self, geo=None) -> None:
+        """Show in the current mode. Camera mode takes the keyboard (Esc closes
+        it); overlay mode never does, and on macOS gets the native overlay set-up."""
+        if self.mode == "overlay":
+            if geo is not None:
+                self.setGeometry(geo)
+            self.show()
+            QTimer.singleShot(0, self._native_overlay)
+        else:
             if geo is not None:
                 self.setGeometry(geo)
             self.showFullScreen()
             self.raise_()
             self.activateWindow()
-        self.core.STATE["mode"] = mode
-        self.update()
+
+    def _native_overlay(self) -> None:
+        if self._closing or self.mode != "overlay":
+            return
+        from .air_control import _mac_overlay_native, _platform
+        if _platform() == "darwin":
+            err = _mac_overlay_native(self)
+            if err:
+                print(f"[HoloDesk] overlay set-up: {err}")
 
     def open_on(self, screen) -> None:
-        if screen is not None:
-            self.setGeometry(screen.geometry())
-        self.showFullScreen()
-        self.raise_()
-        self.activateWindow()
+        self._show(screen.geometry() if screen is not None else None)
 
     # ── camera + hands, on the worker thread ─────────────────────────────────
-    def _camera_loop(self) -> None:
-        from plugins import _camera
-        name = "holo_desk"
-        tracker = None
+    def _start_stream(self, factory=None) -> None:
+        """Camera + tracking on plugins/_hand_stream.HandStream's thread."""
         try:
-            if not _camera.subscribe(name):
-                self._status_sig.emit("camera:OpenCV is not installed")
-                return
-            if _camera.wait_frame(8.0) is None:
-                self._status_sig.emit("camera:" + (_camera.last_error()
-                                                   or "no camera shows a live picture"))
-            try:
-                self._status_sig.emit("Loading the hand models (the first time downloads ~8 MB)...")
-                from plugins import _hands_onnx
-                tracker = _hands_onnx.Tracker()
-                self._status_sig.emit("")
-            except Exception as e:
-                self._status_sig.emit(f"hands:the hand models could not be loaded ({e})")
-            import cv2
-            last = None
-            while not self._stop.wait(1 / 40):
-                frame = _camera.latest(1.0)
-                if frame is None or frame is last:
-                    continue
-                last = frame
-                hands = []
-                if tracker is not None:
-                    h, w = frame.shape[:2]
-                    small = frame if w <= 640 else cv2.resize(frame, (640, int(h * 640 / w)))
-                    try:
-                        hands = tracker.process(small)
-                    except Exception as e:
-                        print(f"[HoloDesk] hand tracking error: {e}")
-                img = None
-                if self.mode == "camera":
-                    h, w = frame.shape[:2]
-                    if w > 1280:
-                        frame = cv2.resize(frame, (1280, int(h * 1280 / w)))
-                    rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
-                    hh, ww = rgb.shape[:2]
-                    img = QImage(rgb.data, ww, hh, ww * 3, QImage.Format.Format_RGB888).copy()
-                if self._stop.is_set():
-                    break
-                self._frame_sig.emit(img, hands, time.monotonic())
-        except RuntimeError:
-            pass                       # the window was closed while a frame was in flight
+            if factory is None:
+                from plugins._hand_stream import HandStream
+                factory = HandStream
+            self.stream = factory("holo_desk", self._on_stream_frame, max_hands=2,
+                                  detect_every=1.0, want_picture=lambda: self.mode == "camera",
+                                  on_status=self._status_sig.emit)
+            self.stream.start()
         except Exception as e:
-            print(f"[HoloDesk] camera loop stopped: {e}")
-        finally:
+            self.stream = None
+            print(f"[HoloDesk] the hand stream could not start: {e}")
+            self.status = f"The hand tracking could not start ({e}) - the mouse still works."
+
+    def _on_stream_frame(self, frame, hands, t_capture) -> None:
+        """Worker thread: the camera picture (only in camera mode) -> QImage,
+        then everything to the Qt thread. A RuntimeError from emit (the window
+        is gone) ends the stream, as HandStream expects."""
+        img = None
+        if frame is not None:
             try:
-                _camera.unsubscribe(name)
-            except Exception:
-                pass
+                import cv2
+                h, w = frame.shape[:2]
+                if w > 1280:
+                    frame = cv2.resize(frame, (1280, int(h * 1280 / w)))
+                rgb = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+                hh, ww = rgb.shape[:2]
+                img = QImage(rgb.data, ww, hh, ww * 3, QImage.Format.Format_RGB888).copy()
+            except Exception as e:
+                print(f"[HoloDesk] camera picture: {e}")
+                img = None
+        if self._stop.is_set():
+            raise RuntimeError("the Holo Desk is closed")
+        self._frame_sig.emit(img, hands, float(t_capture))
 
     def _lock_loop(self) -> None:
         """Close the desk when the computer is locked: a full-screen camera
@@ -412,34 +436,84 @@ class HoloDeskWindow(QWidget):
     def _tick(self) -> None:
         now = time.monotonic()
         dt, self._last = min(0.1, now - self._last), now
-        hands = self.hands if now - self.hands_at < 0.4 else []
-        pointers = self.filter.update(hands, self._to_screen, now)
+        # The filter sees each camera frame once, at its capture time; between
+        # frames the last pointers stand. A camera that stopped sending lets
+        # the hands go (once) after 0.4 s.
+        if self.hands_at != self._filtered_at:
+            self._ptrs = list(self.filter.update(self.hands, self._to_screen, self.hands_at))
+            self._filtered_at = self.hands_at
+        elif self._ptrs and now - self.hands_at > 0.4:
+            self._ptrs = list(self.filter.update([], self._to_screen, now))
+        pointers = list(self._ptrs)
         if self.mouse is not None:
             pointers.append(self.mouse)
         self.pointers = pointers
+        down = {q.pid for q in pointers if q.pid != "mouse" and q.down}
+        if self.sounds is not None and down - self._was_down:
+            self.sounds.play("tick")                   # a soft tick as each pinch lands
+        self._was_down = down
         events = self.inp.update(pointers, now) + self.desk.step(dt)
         for ev in events:
             self._event(ev, now)
         self.effects = [e for e in self.effects if now - e[3] < 0.7]
         self.update()
 
+    # Input events whose sound has another name ("" = none: a crush is
+    # followed by its own ("closed", pid), which plays the close).
+    _EVENT_SOUND = {"crushed": "", "reopened": "restore"}
+
     def _event(self, ev, now: float) -> None:
         kind = ev[0]
+        if kind == "closed" and ev[1] in self._crushed:
+            self._crushed.discard(ev[1])               # its ripple is already there
+            if self.sounds is not None:
+                self.sounds.play("closed")
+            self._forget(ev[1])
+            return
+        if kind == "crushed":
+            self._crushed.add(ev[1])
         if self.sounds is not None:
-            self.sounds.play(kind)
+            name = self._EVENT_SOUND.get(kind, kind)
+            if name:
+                self.sounds.play(name)
         if kind in ("tap", "ring"):
             self.effects.append(("ripple", ev[1], ev[2], now, C.PRI))
-        elif kind in ("closed", "throw", "grab", "added", "focus"):
+        elif kind in ("closed", "throw", "grab", "added", "focus", "crushed", "reopened"):
             p = next((q for q in self.desk.panels if q.pid == ev[1]), None)
             if p is not None:
-                col = {"closed": C.RED, "throw": C.ACC2}.get(kind, C.PRI)
+                col = {"closed": C.RED, "crushed": C.RED, "throw": C.ACC2}.get(kind, C.PRI)
                 self.effects.append(("ripple", p.x + p.w / 2, p.y + p.h / 2, now, col))
         elif kind in ("clap", "restore"):
             self.effects.append(("flash", 0.5, 0.5, now, C.PRI if kind == "restore" else C.ACC))
         if kind == "row":
             self._press_row(ev[1], ev[2])
-        if kind == "closed":
+        if kind in ("closed", "crushed"):
             self._forget(ev[1])
+
+    # ── P2's Input additions, read defensively (a missing one draws nothing) ──
+    def _cursor_at(self, ptr) -> tuple:
+        fn = getattr(self.inp, "cursor_at", None)
+        at = None
+        if callable(fn):
+            try:
+                at = fn(ptr.pid)
+            except Exception:
+                at = None
+        return tuple(at[:2]) if at else (ptr.x, ptr.y)
+
+    def _crush_marks(self, now: float) -> list:
+        fn = getattr(self.inp, "crush_marks", None)
+        try:
+            return list(fn(now) or []) if callable(fn) else []
+        except Exception:
+            return []
+
+    def _undo_chip(self, now: float):
+        fn = getattr(self.inp, "undo_chip", None)
+        try:
+            return fn(now) if callable(fn) else None
+        except Exception:
+            return None
 
     def _press_row(self, pid: int, row: int) -> None:
         p = self.desk.get(pid)
@@ -519,6 +593,14 @@ class HoloDeskWindow(QWidget):
         self._closing = True
         self._stop.set()
         self._timer.stop()
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+            except Exception as e:
+                print(f"[HoloDesk] hand stream stop: {e}")
+        if self._ns_window_number is not None:
+            from .air_control import _forget_window_number
+            _forget_window_number(self)
         for v in self._videos.values():
             v.stop.set()
         self._videos.clear()
@@ -577,12 +659,18 @@ class HoloDeskWindow(QWidget):
         with self.desk.lock:
             panels = list(self.desk.panels)
             focused = self.desk.focused
+        marks = self._crush_marks(now)
+        by_panel = {m.get("panel"): m for m in marks if m.get("panel") is not None}
+        lit_close = {what[6:] for _x, _y, what in self.inp.hover.values()
+                     if str(what).startswith("close:")}
         for panel in panels:
-            self._paint_panel(p, panel, now, panel.pid == focused)
+            self._paint_panel(p, panel, now, panel.pid == focused, by_panel.get(panel.pid),
+                              str(panel.pid) in lit_close)
         self._paint_dock(p)
+        self._paint_undo_chip(p, now)
         self._paint_ring(p)
         self._paint_effects(p, now)
-        self._paint_cursors(p)
+        self._paint_cursors(p, marks)
         self._paint_status(p, now)
         p.end()
 
@@ -590,7 +678,10 @@ class HoloDeskWindow(QWidget):
         W, H = self.width(), self.height()
         return QRectF(panel.x * W, panel.y * H, panel.w * W, panel.h * H)
 
-    def _paint_panel(self, p: QPainter, panel, now: float, focused: bool) -> None:
+    def _paint_panel(self, p: QPainter, panel, now: float, focused: bool, mark=None,
+                     close_lit: bool = False) -> None:
+        """One card. `mark` is its crush mark (Input.crush_marks): a red edge,
+        a glowing ✕ and, while the fist closes, the card squeezing in."""
         r = self._rect(panel)
         alpha = 1.0
         scale = 1.0
@@ -600,6 +691,8 @@ class HoloDeskWindow(QWidget):
         elif now - panel.born < 0.3:
             k = (now - panel.born) / 0.3
             alpha, scale = k, 0.85 + 0.15 * k
+        elif mark is not None and mark.get("phase") == "closing":
+            scale = 1 - 0.15 * max(0.0, min(1.0, float(mark.get("progress", 0.0) or 0.0)))
         if alpha <= 0.01:
             return
         if scale != 1.0:
@@ -622,6 +715,8 @@ class HoloDeskWindow(QWidget):
         p.setBrush(glass)
         p.drawPolygon(shape)
         edge = C.PRI if (focused or panel.held) else C.BORDER_B
+        if mark is not None:
+            edge = C.RED
         for width, a in ((6, 0.10), (3, 0.22), (1.3, 0.95)):
             p.setPen(QPen(with_alpha(edge, a), width))
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -639,9 +734,17 @@ class HoloDeskWindow(QWidget):
         title = fm.elidedText(title, Qt.TextElideMode.ElideRight, r.width() - hh - cut - 16)
         p.drawText(QRectF(r.left() + cut + 4, r.top(), r.width() - hh - cut, hh),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, title)
-        p.setPen(QColor(C.TEXT_DIM))
-        p.setFont(hud_font(max(8.0, hh * 0.34)))
-        p.drawText(QRectF(r.right() - hh, r.top(), hh, hh), Qt.AlignmentFlag.AlignCenter, "✕")
+        x_box = QRectF(r.right() - hh, r.top(), hh, hh)
+        if mark is not None or close_lit:              # the ✕ lights up: red when armed
+            col = C.RED if mark is not None else C.PRI
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(with_alpha(col, 0.35))
+            p.drawEllipse(x_box.center(), hh * 0.42, hh * 0.42)
+            p.setPen(QColor(C.WHITE))
+        else:
+            p.setPen(QColor(C.TEXT_DIM))
+        p.setFont(hud_font(max(8.0, hh * 0.34), QFont.Weight.Bold if mark is not None else None))
+        p.drawText(x_box, Qt.AlignmentFlag.AlignCenter, "✕")
         body = QRectF(r.left() + 12, r.top() + hh + 6, r.width() - 24, r.height() - hh - 14)
         p.setClipRect(body.adjusted(-2, -2, 2, 2))
         try:
@@ -651,6 +754,8 @@ class HoloDeskWindow(QWidget):
             p.setFont(hud_font(9))
             p.drawText(body, Qt.TextFlag.TextWordWrap, f"Could not draw this panel: {e}")
         p.restore()
+        if mark is not None and mark.get("phase") == "armed":
+            self._label(p, r.center().x(), r.top() - 16, "✊ close", C.RED)
 
     # ── panel bodies ─────────────────────────────────────────────────────────
     def _text(self, p, rect, text, size, colour=None, align=None, bold=False,
@@ -897,16 +1002,48 @@ class HoloDeskWindow(QWidget):
             if on:
                 self._label(p, c.x(), c.y() - r * 1.9, self.core.LABELS.get(kind, kind))
 
-    def _label(self, p, x, y, text) -> None:
+    def _label(self, p, x, y, text, edge=None) -> None:
         p.setFont(hud_font(9, QFont.Weight.Bold))
         fm = QFontMetricsF(p.font())
         w = fm.horizontalAdvance(text) + 14
         rect = QRectF(x - w / 2, y - 11, w, 22)
-        p.setPen(QPen(QColor(C.PRI), 1))
+        p.setPen(QPen(QColor(edge or C.PRI), 1))
         p.setBrush(with_alpha(C.BG, 0.85))
         p.drawRect(rect)
         p.setPen(QColor(C.TEXT))
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _paint_undo_chip(self, p: QPainter, now: float) -> None:
+        """'Undo close' for a few seconds after a card closes: a glass button
+        with a countdown bar under the label."""
+        chip = self._undo_chip(now)
+        if not chip:
+            return
+        W, H = self.width(), self.height()
+        r = QRectF(float(chip.get("x", 0)) * W, float(chip.get("y", 0)) * H,
+                   float(chip.get("w", 0.1)) * W, float(chip.get("h", 0.04)) * H)
+        if r.width() < 4 or r.height() < 4:
+            return
+        on = any(what == "chip" for _x, _y, what in self.inp.hover.values())
+        cut = min(10.0, r.height() * 0.3)
+        shape = chamfer(r, cut, ("tl", "br"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(with_alpha(C.PRI if on else C.PANEL2, 0.45 if on else 0.88))
+        p.drawPolygon(shape)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for width, a in ((5, 0.12), (1.3, 0.95)):
+            p.setPen(QPen(with_alpha(C.PRI if on else C.BORDER_B, a), width))
+            p.drawPolygon(shape)
+        p.setPen(QColor(C.WHITE if on else C.TEXT))
+        p.setFont(hud_font(max(8.0, r.height() * 0.28), QFont.Weight.Bold))
+        p.drawText(r.adjusted(0, 0, 0, -4), Qt.AlignmentFlag.AlignCenter,
+                   "↶  " + str(chip.get("label") or "Undo close"))
+        total = float(getattr(self.desk, "TRASH_S", 8.0) or 8.0)
+        left = max(0.0, min(1.0, float(chip.get("left", 0.0) or 0.0) / total))
+        bar = QRectF(r.left() + cut, r.bottom() - 5, (r.width() - 2 * cut) * left, 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(C.PRI))
+        p.drawRect(bar)
 
     def _paint_ring(self, p: QPainter) -> None:
         ring = self.inp.ring
@@ -936,9 +1073,12 @@ class HoloDeskWindow(QWidget):
               (10, 11), (11, 12), (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (17, 18),
               (18, 19), (19, 20), (0, 17))
 
-    def _paint_cursors(self, p: QPainter) -> None:
+    def _paint_cursors(self, p: QPainter, marks=()) -> None:
         W, H = self.width(), self.height()
         now = time.monotonic()
+        closing = {m.get("pointer"): float(m.get("progress", 0.0) or 0.0) for m in marks
+                   if m.get("phase") == "closing"}
+        v_scroll = getattr(self.inp, "v_scroll", None) or {}
         # Holding still on empty space: an arc fills until the ring opens.
         for x, y, frac in self.inp.hold_progress(now):
             rect = QRectF(x * W - 28, y * H - 28, 56, 56)
@@ -959,12 +1099,31 @@ class HoloDeskWindow(QWidget):
                 p.setBrush(with_alpha(C.WHITE, 0.45))
                 for i in (4, 8, 12, 16, 20):
                     p.drawEllipse(QPointF(ptr.pts[i][0] * W, ptr.pts[i][1] * H), 3, 3)
-            c = QPointF(ptr.x * W, ptr.y * H)
+            cx, cy = self._cursor_at(ptr)
+            c = QPointF(cx * W, cy * H)
             r = 16.0
-            col = QColor(C.ACC2 if ptr.down else C.PRI)
+            if ptr.pid in v_scroll:                    # two-finger scroll: a capsule
+                cap = QRectF(c.x() - r * 0.8, c.y() - r * 1.5, r * 1.6, r * 3.0)
+                p.setPen(QPen(QColor(C.PRI), 2))
+                p.setBrush(with_alpha(C.PRI_GHO, 0.7))
+                p.drawRoundedRect(cap, r * 0.8, r * 0.8)
+                p.setPen(QColor(C.WHITE))
+                p.setFont(px_font(r))
+                p.drawText(cap, Qt.AlignmentFlag.AlignCenter, "↕")
+                continue
+            # Open: the theme colour; armed (fingers closing in): amber ring;
+            # pinched: filled amber.
+            armed = getattr(ptr, "state", "") == "armed" and not ptr.down
+            col = QColor(C.ACC2 if (ptr.down or armed) else C.PRI)
             p.setPen(QPen(with_alpha(col, 0.35), 6))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(c, r, r)
+            if ptr.pid in closing:                     # crush: a red arc fills
+                rect = QRectF(c.x() - r - 9, c.y() - r - 9, 2 * r + 18, 2 * r + 18)
+                p.setPen(QPen(with_alpha(C.RED, 0.25), 4))
+                p.drawEllipse(rect)
+                p.setPen(QPen(QColor(C.RED), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                p.drawArc(rect, 90 * 16, int(-360 * 16 * max(0.0, min(1.0, closing[ptr.pid]))))
             # The inner ring closes in as the fingers do; full and filled = pinched.
             inner = r * (1.0 - 0.45 * max(0.0, min(1.0, ptr.pinch)))
             p.setPen(QPen(col, 2))
@@ -998,7 +1157,8 @@ class HoloDeskWindow(QWidget):
                    head)
         line = self.status or (self.hint if now < self.hint_until else "")
         if self.mode == "camera" and not self.status and now >= self.hint_until:
-            line = "Esc closes the desk  ·  ? shows every gesture"
+            line = ("Esc closes the desk  ·  open hand then fist closes a card  ·  "
+                    "? shows every gesture")
         if line:
             p.setFont(hud_font(9))
             p.setPen(QColor(C.ACC2 if self.status else C.TEXT_MED))

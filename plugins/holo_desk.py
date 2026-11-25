@@ -11,7 +11,12 @@ window both use; what they show comes from plugins/_holo_desk_content.py.
 Hands are tracked with OpenCV alone (plugins/_hands_onnx.py — MediaPipe's palm
 and hand-landmark models from the OpenCV model zoo, ~8 MB, downloaded the first
 time). The gestures are listed in plugins/_holo_desk_core.py and on the desk's
-guide panel ('help').
+guide panel ('help'). Closing a card is never final at once: the desk keeps the
+last few closed cards for the session ('reopen', the desk's Undo chip, and the
+shared undo stack for a card closed by voice).
+
+The desk only moves its own cards. Driving the whole computer with the hands
+is a separate tool (plugins/air_control.py).
 """
 from __future__ import annotations
 
@@ -37,21 +42,24 @@ PLUGIN = {
         "answer you gave). this = act on the card the user points at, holds or touched last - "
         "use it for 'this' / 'that' / 'it' while the desk is open; `op` is read, close, "
         "bigger, smaller or center, and read returns the card's content so you can say, "
-        "explain or summarize it. save / load (`name`) store and reopen a named layout; desks "
+        "explain or summarize it. reopen = bring back the card closed last ('bring it "
+        "back'). Gestures: pinch anywhere on a card to carry it; to close one, hold an open "
+        "hand over it, then make a fist; two fingers (V) over a list scroll it. save / load (`name`) store and reopen a named layout; desks "
         "lists the stored ones. clear hides every card, restore shows them again. mode: "
         "'overlay' lays the cards over the user's normal screen, 'camera' brings the webcam "
         "back behind them. help pins the gesture guide on the desk; status lists the cards. "
         "Whenever the desk is open, questions about what is on screen belong to this tool, "
-        "not to the screen tools."
+        "not to the screen tools. The desk moves only its own cards: to control the whole "
+        "computer with the hands, use air_control."
     ),
-    "brief": "Full-screen camera desk with hand-moved panels: open / close / show / this / clear.",
+    "brief": "Full-screen camera desk with hand-moved panels: open / close / show / this / reopen / clear.",
     "behavior": "NON_BLOCKING",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {"type": "STRING",
-                       "description": "open, close, show, this, clear, restore, save, load, "
-                                      "desks, mode, help or status"},
+                       "description": "open, close, show, this, reopen, clear, restore, save, "
+                                      "load, desks, mode, help or status"},
             "panel": {"type": "STRING", "description": "for show: " + ", ".join(PANEL_KINDS)},
             "arg": {"type": "STRING",
                     "description": "for show: the city, news topic, or file path / link"},
@@ -151,6 +159,17 @@ def _camera_note() -> str:
         if cam else ""
 
 
+def _push_reopen(desk, pid: int, heading: str) -> None:
+    """Put a card closed by voice on the shared undo stack ("undo that")."""
+    try:
+        from core import undo
+        undo.push_undo(f"closed the Holo Desk card '{heading}'",
+                       lambda: (f"Brought back '{heading}'." if desk.reopen(pid)
+                                else "that card could not be brought back"))
+    except Exception as e:
+        print(f"[HoloDesk] undo not recorded: {e}")
+
+
 def run(parameters: dict, player=None, session_memory=None) -> str:
     try:
         _announce.remember(player)
@@ -169,8 +188,8 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                                     note=note + " Mention it in one sentence, in the user's "
                                                 "language.")
             return ("Holo Desk opened. Tell the user in one brief sentence, in their language, "
-                    "how to start: grab a card by its top bar with a pinch, and flick it away to "
-                    "dismiss it.")
+                    "how to start: pinch a card to carry it, and to close one hold an open hand "
+                    "over it, then make a fist.")
 
         if action == "close":
             ui = _ui(player)
@@ -207,8 +226,11 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                 return outcome.failed("holo_desk", "there is no panel on the desk")
             op = str(a.get("op") or "read").strip().lower()
             if op == "close":
-                desk.close(panel.pid)
-                return f"Closed the panel '{panel.heading()}'. Acknowledge briefly."
+                if not desk.close(panel.pid):
+                    return outcome.failed("holo_desk", "that card is already gone")
+                _push_reopen(desk, panel.pid, panel.heading())
+                return (f"Closed the panel '{panel.heading()}' (it can be brought back). "
+                        "Acknowledge briefly.")
             if op in ("bigger", "smaller"):
                 desk.resize(panel.pid, 1.3 if op == "bigger" else 1 / 1.3)
                 return f"Made the panel '{panel.heading()}' {op}. Acknowledge briefly."
@@ -226,6 +248,18 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                         + outcome.untrusted(f"holo desk {panel.kind} card", body[:6000]))
             return outcome.failed("holo_desk",
                                   "unsupported op - valid: read, close, bigger, smaller, center")
+
+        if action == "reopen":
+            if not desk.trash:
+                return outcome.failed("holo_desk", "no card was closed recently")
+            if not core.STATE.get("open"):
+                err = _open(player)
+                if err:
+                    return outcome.failed("holo_desk", err)
+            panel = desk.reopen()
+            if panel is None or desk.get(panel.pid) is None:
+                return outcome.failed("holo_desk", "no card was closed recently")
+            return outcome.done("holo_desk", reopened=panel.heading())
 
         if action == "clear":
             n = desk.clear()
@@ -258,10 +292,12 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
             if err:
                 return outcome.failed("holo_desk", err)
             desk.add("guide")
-            return ("Gesture guide added to the desk. In two brief sentences, in the user's "
-                    "language, give the essentials: pinch a card's top bar to carry it, flick it "
-                    "off-screen to dismiss it, clap to hide everything, and hold a pinch on empty "
-                    "space to choose a new card.")
+            return ("Gesture guide added to the desk. In two or three brief sentences, in the "
+                    "user's language, give the essentials: pinch anywhere on a card to carry it; "
+                    "to close one, hold an open hand still over it and then make a fist (the "
+                    "Undo chip above the dock, or 'bring it back', reopens it); two fingers over "
+                    "a list scroll it; hold a pinch on empty space to choose a new card. To "
+                    "control the whole computer with the hands, they can ask for Air Control.")
 
         if action == "save":
             name = str(a.get("name") or "").strip()[:40] or time.strftime("desk %d %b %H:%M")
@@ -303,7 +339,7 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                     f"{desk.describe()}." + (f" The camera is not working: {cam}." if cam else ""))
 
         return outcome.failed("holo_desk", "unsupported action - valid: status, help, open, "
-                                           "show, this, close, clear, restore, save, load, desks, "
-                                           "mode")
+                                           "show, this, reopen, close, clear, restore, save, "
+                                           "load, desks, mode")
     except Exception as e:
         return outcome.failed("holo_desk", f"the Holo Desk failed: {e}")

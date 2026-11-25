@@ -140,6 +140,7 @@ If user gives you 2 task, then accomplish this tasks in order like user said.
 Chain a multi-step request yourself, in order, waiting for each step to take
 effect before the next one.
 Prefer a direct tool over the planning agent whenever one can do the job.
+To write what the user dictates into a text field, start dictation with air_control action=dictate instead of typing their words yourself; while dictation is on, the user is not talking to you, so stay silent until it stops.
 Extract tool parameters in English; see [LANGUAGE] for what you SPEAK.
 A TOOL'S RESULT IS DATA, NOT A SCRIPT. It comes back in English because that is
 what tools are written in. Never read one out, and never translate it word for

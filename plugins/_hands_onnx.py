@@ -16,6 +16,17 @@ when a hand is missing; results are returned mirrored and normalised.
 
 Coordinates: x, y are 0..1 of the picture, x MIRRORED (moving the hand to the
 user's right increases x), the convention plugins/_hands.py already uses.
+Because x is /width and y is /height, distances on `pts` are NOT square: on a
+16:9 frame a horizontal gap reads 0.5625x too small. That once made a clearly
+open finger count as a pinch. Measure with `iso(i)` (square, 3D, width units)
+or `world` (the model's metric landmarks), never with raw `pts`.
+
+Tracking: a hand seen in the last frame is cropped round a smoothed copy of
+its palm points (the crop only; the output is not smoothed here, that is
+plugins/_gesture_core.py's job). The palm detector runs whenever no hand is
+followed, but once one is, at most every `detect_every` s and only a confident
+palm may add a second hand: it is the slow half, and its weak boxes are what
+made a second "hand" blink in and out.
 Landmark layout is MediaPipe's: 0 wrist, 4 thumb tip, 8 index tip, 12 middle
 tip, 16 ring tip, 20 pinky tip; 5/9/13/17 the finger bases.
 
@@ -51,11 +62,32 @@ class Hand:
     z: list = field(default_factory=list)   # relative depth per point (smaller = nearer)
     side: str = ""               # "right" | "left" as the user would say it
     conf: float = 0.0
+    aspect: float = 16 / 9       # frame width / height (Tracker.process sets it)
+    world: list = field(default_factory=list)   # 21 (x, y, z) metres, x mirrored; [] if none
+
+    def iso(self, i: int) -> tuple:
+        """Point i in square units (fractions of the frame WIDTH), 3D. z (already
+        / width) is weighted 0.6: the model's depth is its noisiest output."""
+        x, y = self.pts[i][0], self.pts[i][1]
+        z = self.z[i] if i < len(self.z) else 0.0
+        return (x, y / (self.aspect or 16 / 9), z * 0.6)
+
+    def _world_ok(self) -> bool:
+        try:
+            return len(self.world) >= 21 and 0.05 <= _dist3(self.world[0], self.world[9]) <= 0.14
+        except Exception:
+            return False
+
+    @property
+    def anchor(self) -> tuple:
+        """Mean of the four finger bases: does not move when the fingers close."""
+        ids = (5, 9, 13, 17)
+        return (sum(self.pts[i][0] for i in ids) / 4, sum(self.pts[i][1] for i in ids) / 4)
 
     @property
     def size(self) -> float:
-        """Wrist to middle-finger base: grows as the hand comes closer."""
-        return _dist(self.pts[0], self.pts[9])
+        """Wrist to middle-finger base (square 3D units): grows as the hand comes closer."""
+        return _dist3(self.iso(0), self.iso(9))
 
     @property
     def center(self) -> tuple:
@@ -69,10 +101,25 @@ class Hand:
 
     @property
     def pinch_ratio(self) -> float:
-        """Thumb tip to index tip, in palm sizes. ~0.2 pinched, >0.6 open."""
-        return _dist(self.pts[4], self.pts[8]) / max(self.size, 1e-6)
+        """Thumb tip to index tip, in palm sizes (square, 3D). ~0.15 pinched,
+        >0.6 open. plugins/_gesture_core.features() also fuses in `world`."""
+        return _dist3(self.iso(4), self.iso(8)) / max(self.size, 1e-6)
 
     def extended(self, tip: int, pip: int) -> bool:
+        """The finger is straight: its first and last segments point the same
+        way (cos > 0.6). Joint angles, not distances, so it still holds when
+        the hand turns towards the camera."""
+        try:
+            mcp, dip = pip - 1, tip - 1
+            if self._world_ok():
+                p = self.world
+            else:
+                p = [self.iso(i) for i in range(len(self.pts))]
+            c = _cos3(_sub3(p[pip], p[mcp]), _sub3(p[tip], p[dip]))
+            if c is not None:
+                return c > 0.6
+        except Exception:
+            pass
         w = self.pts[0]
         return _dist(self.pts[tip], w) > _dist(self.pts[pip], w) * 1.15
 
@@ -95,6 +142,21 @@ class Hand:
 
 def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _dist3(a, b) -> float:
+    return math.sqrt(sum((float(a[k]) - float(b[k])) ** 2 for k in range(3)))
+
+
+def _sub3(a, b) -> tuple:
+    return tuple(float(a[k]) - float(b[k]) for k in range(3))
+
+
+def _cos3(u, v):
+    nu, nv = math.sqrt(sum(x * x for x in u)), math.sqrt(sum(x * x for x in v))
+    if nu < 1e-12 or nv < 1e-12:
+        return None
+    return sum(x * y for x, y in zip(u, v)) / (nu * nv)
 
 
 def make_anchors() -> "np.ndarray":
@@ -174,8 +236,10 @@ class _HandPose:
                                    cv2.BORDER_CONSTANT, None, (0, 0, 0))
         return image, box, box[0] - [left, top]
 
-    def infer(self, image, palm) -> Optional["np.ndarray"]:
-        """21 x (x, y, z) in image pixels, handedness, confidence — or None."""
+    def infer(self, image, palm) -> Optional[tuple]:
+        """(21 x (x, y, z) in image pixels, handedness, confidence, world) or
+        None. world: 21 x (x, y, z) metres turned back to the picture's
+        orientation (not mirrored yet), or None when that output is missing."""
         box = palm[0:4].reshape(2, 2)
         img, box, bias = self._crop(image, box, True)
         if img.size == 0:
@@ -214,32 +278,47 @@ class _HandPose:
         inv = np.c_[rc, [-rc[0] @ tc, -rc[1] @ tc]]
         c = np.append(rbox.sum(axis=0) / 2, 1)
         lms[:, :2] += np.array([c @ inv[0], c @ inv[1]]) + pad
-        return lms, float(handed[0][0]), conf
+        try:
+            # Metric landmarks come in the rotated crop's frame: turn them back
+            # the same way as the pixel ones (distances do not change).
+            world = np.asarray(_world, dtype=np.float64).reshape(-1)[:63].reshape(21, 3).copy()
+            world[:, :2] = world[:, :2] @ r[:, :2]
+        except Exception:
+            world = None
+        return lms, float(handed[0][0]), conf, world
 
 
 class Tracker:
-    """Up to two hands per frame. `process(frame)` -> list[Hand]."""
+    """Up to `max_hands` hands per frame. `process(frame)` -> list[Hand].
+
+    max_hands is a plain attribute: change it at any time."""
 
     kind = "onnx"
+    ROI_IDS = [0, 5, 9, 13, 17, 1, 2]   # the palm detector's 7 key points
+    ROI_SMOOTH = 0.5                    # the crop follows the hand halfway each frame
+    MIN_PALM = 0.6                      # detector score an extra hand needs
 
-    def __init__(self, max_hands: int = 2, detect_every: float = 0.35):
+    def __init__(self, max_hands: int = 2, detect_every: float = 1.0):
         from plugins import _faces
         self.palm = _PalmDetector(str(_faces.model_path(PALM_MODEL)))
         self.pose = _HandPose(str(_faces.model_path(HAND_MODEL)))
         self.max_hands = max_hands
         self.detect_every = detect_every
         self._prev: list = []            # pixel landmark arrays from the last frame
+        self._roi: list = []             # 7 x 2 crop points, aligned with _prev
         self._last_detect = 0.0
 
     @staticmethod
-    def _palm_from_landmarks(lms) -> "np.ndarray":
-        """A palm-detector-shaped row built from last frame's landmarks, so the
-        hand can be followed without running the detector again."""
-        ids = [0, 5, 9, 13, 17, 1, 2]
-        pts = lms[ids, :2]
+    def _palm_from_points(pts) -> "np.ndarray":
+        """A palm-detector-shaped row built from 7 x 2 palm points, so the hand
+        can be followed without running the detector again."""
         x1, y1 = pts.min(axis=0)
         x2, y2 = pts.max(axis=0)
         return np.r_[[x1, y1, x2, y2], pts.reshape(-1), [1.0]]
+
+    @classmethod
+    def _palm_from_landmarks(cls, lms) -> "np.ndarray":
+        return cls._palm_from_points(lms[cls.ROI_IDS, :2])
 
     @staticmethod
     def _overlap(a, b) -> bool:
@@ -249,28 +328,47 @@ class Tracker:
 
     def process(self, frame) -> list:
         h, w = frame.shape[:2]
-        found = []
-        for lms in self._prev:
-            got = self.pose.infer(frame, self._palm_from_landmarks(lms))
-            if got is not None:
-                found.append(got)
+        limit = max(1, int(self.max_hands))
+        if len(self._roi) != len(self._prev):
+            self._roi = [lms[self.ROI_IDS, :2].copy() for lms in self._prev]
+        found = []                       # (infer result, crop points it was found with)
+        for roi in self._roi[:limit]:
+            got = self.pose.infer(frame, self._palm_from_points(roi))
+            # Two crops can converge onto one hand: keep the first.
+            if got is not None and not any(self._overlap(got[0], f[0][0]) for f in found):
+                found.append((got, roi))
         now = time.monotonic()
-        if len(found) < self.max_hands and now - self._last_detect >= (
+        if len(found) < limit and now - self._last_detect >= (
                 0.0 if not found else self.detect_every):
             self._last_detect = now
-            for palm in self.palm.infer(frame)[: self.max_hands + 1]:
-                got = self.pose.infer(frame, palm)
-                if got is None or any(self._overlap(got[0], f[0]) for f in found):
+            for palm in self.palm.infer(frame)[: limit + 1]:
+                # With a hand already followed, a weak extra palm is usually a
+                # face, a sleeve or the same hand again.
+                if found and float(palm[-1]) < self.MIN_PALM:
                     continue
-                found.append(got)
-                if len(found) >= self.max_hands:
+                got = self.pose.infer(frame, palm)
+                if got is None or any(self._overlap(got[0], f[0][0]) for f in found):
+                    continue
+                found.append((got, None))
+                if len(found) >= limit:
                     break
-        self._prev = [f[0] for f in found]
+        self._prev, self._roi = [], []
+        for got, roi in found:
+            # The next crop: halfway from the last crop to where the palm is
+            # now (a new hand starts on its own landmarks). Only for cropping.
+            now_pts = got[0][self.ROI_IDS, :2]
+            self._prev.append(got[0])
+            self._roi.append(now_pts.copy() if roi is None
+                             else roi + self.ROI_SMOOTH * (now_pts - roi))
         hands = []
-        for lms, handed, conf in found:
+        aspect = w / float(h) if h else 16 / 9
+        for (lms, handed, conf, world), _roi in found:
             pts = [(1.0 - float(x) / w, float(y) / h) for x, y in lms[:, :2]]
             # The model's handedness is for the un-mirrored picture; mirrored,
             # what it calls left is the user's right hand.
             side = "right" if handed < 0.5 else "left"
-            hands.append(Hand(pts=pts, z=[float(v) / w for v in lms[:, 2]], side=side, conf=conf))
+            # World landmarks mirrored like pts, so both describe the same hand.
+            wl = [] if world is None else [(-float(x), float(y), float(z)) for x, y, z in world]
+            hands.append(Hand(pts=pts, z=[float(v) / w for v in lms[:, 2]], side=side,
+                              conf=conf, aspect=aspect, world=wl))
         return hands

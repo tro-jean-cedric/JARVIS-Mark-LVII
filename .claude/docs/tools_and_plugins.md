@@ -79,6 +79,27 @@ New code uses outcome; convert an old action when you touch its return paths.
   model-filled `"confirmed"` parameter as a safety gate (the existing one in
   `computer_control` close_app only disambiguates).
 
+## Air Control: user-driven input, not model actions
+
+`plugins/air_control.py` (voice side) and `plugins/_air_control_core.py` (gesture engine)
+turn the user's own hand into mouse and keyboard input through `core/os_input.py`
+(Quartz / SendInput / XTest, queued on its `InputPump`). This is the user
+operating their computer, so it does not go through `core/screenact.py`'s guarded
+model actions, undo or confirm. The model only starts, stops and queries it (and
+starts dictation, `action=dictate`); it never moves the pointer through it. The
+engine returns action tuples and the `Dispatcher` sends them; keys, text and
+Cmd/Ctrl+W are dropped (with on-screen feedback) while JARVIS's own window has the
+keyboard (`os_input.own_app_focused()`), so a gesture can never type into or close
+JARVIS. `start` reports `done` only after the overlay confirmed click-through and
+`os_input.self_check()` saw the cursor move.
+
+Dictation (`core/dictation.py`) takes the microphone inside main.py's mic
+callback while `dictation.active()`: blocks go to its own STT, never to the
+model, and are dropped while JARVIS speaks. Both Air Control and Holo Desk
+read hands through `plugins/_hand_stream.HandStream` and filter them with
+`plugins/_gesture_core.HandFilter` (profile `air` / `desk`); tune pinch and
+pose rules there, not in the windows.
+
 ## Recurring implementation patterns in actions
 
 - **Per-OS branching:** module constant `_OS = platform.system()` compared to

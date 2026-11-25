@@ -35,7 +35,8 @@ _subscribers: set[str] = set()
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 _frame = None            # last BGR frame (numpy array)
-_frame_at = 0.0
+_frame_at = 0.0          # time.time() of _frame (wall clock: freshness checks)
+_frame_mono = 0.0        # time.monotonic() of _frame (capture time for gesture timing)
 _error = ""
 
 
@@ -66,7 +67,7 @@ def _open():
 
 
 def _loop() -> None:
-    global _frame, _frame_at, _error
+    global _frame, _frame_at, _frame_mono, _error
     cap = None
     try:
         cap = _open()
@@ -85,6 +86,9 @@ def _loop() -> None:
                 time.sleep(0.05)
                 continue
             misses = 0
+            # The stamp first: a reader that sees the new frame then also sees
+            # a stamp at least this new (at worst it skips one duplicate).
+            _frame_mono = time.monotonic()
             _frame, _frame_at = frame, time.time()
             time.sleep(0.03)   # ~30 fps is plenty and keeps a core free
     except Exception as e:  # never let the thread die silently
@@ -197,6 +201,17 @@ def latest(max_age: float = 1.0):
     if _frame is None or time.time() - _frame_at > max_age:
         return None
     return _frame
+
+
+def latest_stamped(max_age: float = 1.0) -> tuple:
+    """(newest BGR frame, time.monotonic() when it was captured), or
+    (None, 0.0) when the stream has nothing fresh. Hand tracking needs the
+    capture time: velocities and pinch timing are per camera frame, not per
+    screen refresh."""
+    f, at, mono = _frame, _frame_at, _frame_mono
+    if f is None or time.time() - at > max_age:
+        return None, 0.0
+    return f, mono
 
 
 def wait_frame(timeout: float = 5.0, max_age: float = 1.0):

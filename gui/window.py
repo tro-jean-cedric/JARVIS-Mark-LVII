@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
     _hud_frame_stop_sig = pyqtSignal()
     # The full-screen Holo Desk (gui/holo_desk.py): (command, arguments).
     _holo_sig       = pyqtSignal(str, object)
+    # Air Control's overlay (gui/air_control.py): (command, arguments).
+    _air_sig        = pyqtSignal(str, object)
     # Face Lock's lock screen (gui/lock_screen.py): (locked, {"owner": name}).
     _lock_screen_sig = pyqtSignal(bool, object)
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
@@ -443,9 +445,11 @@ class MainWindow(QMainWindow):
         self._hud_frame_sig.connect(self._on_hud_frame)
         self._hud_frame_stop_sig.connect(self._on_hud_frame_stop)
         self._holo_sig.connect(self._on_holo)
+        self._air_sig.connect(self._on_air)
         self._lock_screen_sig.connect(self._on_lock_screen)
         self._lock_screens = None
         self._holo = None
+        self._air = None
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
         self._image_open_sig.connect(self._on_image_open)
@@ -545,6 +549,8 @@ class MainWindow(QMainWindow):
         kw = dict(kw or {})
         try:
             if cmd == "open":
+                if self._air is not None:          # one camera mode at a time
+                    self._air_closed()
                 if self._holo is None:
                     from plugins import _holo_desk_core as holo_core
                     from .holo_desk import HoloDeskWindow
@@ -556,8 +562,11 @@ class MainWindow(QMainWindow):
                 else:
                     if kw.get("mode"):
                         self._holo.set_mode(kw["mode"])
-                    self._holo.raise_()
-                    self._holo.activateWindow()
+                    if self._holo.mode == "camera":
+                        # Only camera mode takes the focus (Esc closes it); an
+                        # overlay must leave the keyboard where it is.
+                        self._holo.raise_()
+                        self._holo.activateWindow()
             elif cmd == "mode" and self._holo is not None:
                 self._holo.set_mode(kw.get("mode") or "camera")
             elif cmd == "close":
@@ -586,6 +595,47 @@ class MainWindow(QMainWindow):
 
     def _holo_closed(self, already_closed: bool = False) -> None:
         w, self._holo = self._holo, None
+        if w is not None and not already_closed:
+            w.shutdown()
+
+    # Air Control: a click-through overlay driving the real mouse, made and
+    # driven here only. It and the Holo Desk share the camera and the hands,
+    # so opening one closes the other.
+    def _on_air(self, cmd: str, kw) -> None:
+        kw = dict(kw or {})
+        try:
+            if cmd == "open":
+                if self._air is not None:
+                    return                         # already open; never take the focus
+                if self._holo is not None:
+                    self._holo_closed()
+                from .air_control import AirControlWindow
+                self._air = AirControlWindow(
+                    on_close=self._air_closed,
+                    log=lambda s: self._log.append_log(f"SYS: {s}"))
+                self._air.open_on(self.screen())
+            elif cmd == "keyboard":
+                if self._air is not None:
+                    self._air.open_keyboard()
+            elif cmd == "close":
+                self._air_closed()
+        except Exception as e:
+            try:
+                from plugins import _air_control_core as air_core
+                air_core.STATE.update(open=False, input_ok=False,
+                                      error=f"Air Control could not open: {e}")
+            except Exception:
+                pass
+            self._log.append_log(f"SYS: Air Control failed: {e}")
+            w, self._air = self._air, None
+            if w is not None:
+                try:
+                    w.shutdown()
+                except Exception:
+                    pass
+
+    def _air_closed(self, already_closed: bool = False) -> None:
+        w, self._air = self._air, None
         if w is not None and not already_closed:
             w.shutdown()
 

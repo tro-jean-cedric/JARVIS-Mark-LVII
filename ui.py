@@ -470,6 +470,12 @@ class JarvisUI:
         Its state is read back from plugins._holo_desk_core.STATE."""
         self._win._holo_sig.emit(str(cmd or ""), dict(kw))
 
+    def air_control(self, cmd: str, **kw) -> None:
+        """Thread-safe: open / close Air Control (gui/air_control.py) or show
+        its keyboard. cmd: 'open' | 'close' | 'keyboard'. State is read back
+        from plugins._air_control_core.STATE."""
+        self._win._air_sig.emit(str(cmd or ""), dict(kw))
+
     @property
     def assistant_name(self) -> str:
         return self._win._assistant_name

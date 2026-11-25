@@ -12,17 +12,41 @@ Coordinates are 0..1 of the SCREEN on both axes. A panel's w and h are in
 those units too; the window turns them into pixels.
 
 THE GESTURES (what the guide panel and the 'help' action describe)
-  pinch a title bar ........ pick the panel up; open the fingers to let go
+  pinch anywhere on a card . pick it up; open the fingers to let go (on a
+                             list, a sideways pull or a still hold picks it up)
   let go while moving ...... it is thrown; thrown off the screen, it closes
-  pinch inside a list ...... scroll it up and down
+  pinch inside a list ...... drag up and down to scroll it
+  two fingers (V) on a list  move the hand up and down to scroll it
+  open hand, then a fist ... "crush": hold an open hand still over a card,
+                             then close it into a fist; the card closes
+  Undo chip ................ every close shows "Undo close" above the dock for
+                             8 s; pinch it (or say "bring it back")
   both hands on one panel .. pull apart / together to resize it
   pull a held panel nearer . it grows (the hand gets bigger in the picture)
   clap two open hands ...... every card is hidden; spread them again to
                              show it all
   pinch and hold on space .. a ring of new panels opens round the hand
-  quick pinch .............. presses buttons: the dock, a headline, a note
+  quick pinch .............. presses buttons: the dock, a headline, a note, the
+                             x; near a button the cursor snaps onto it
   point at a panel ......... it becomes "this" for "close this", "read this"
+                             (hovering over one for 0.4 s does the same)
   turn a held hand ......... rotates the 3D model
+
+WHY IT IS BUILT LIKE THIS
+  Hands are noisy and a hand cannot feel a button. So targets are bigger than
+  they are drawn (HEADER_HIT, CLOSE_HIT, DOCK_HIT, RING_HIT), the cursor is
+  pulled onto a button it is near (MAGNET) and the lit button stays lit until
+  the hand is clearly elsewhere (no flicker between two neighbours), and the
+  button that is lit is the one a pinch presses. Closing must never happen by
+  accident, so it needs two deliberate poses in a row (crush) or a quick tap
+  on the x, and every close can be taken back for TRASH_S seconds. A throw is
+  measured on the hand's motion BEFORE the last 50 ms: opening the fingers to
+  let go moves the fingertips, and that used to fling a card the user only
+  meant to drop.
+
+  The tracking itself (smoothing, pinch decision, pose voting) lives in
+  plugins/_gesture_core.py, shared with Air Control; HandFilter below only
+  turns its HandStates into Pointers.
 """
 from __future__ import annotations
 
@@ -50,20 +74,32 @@ DEFAULT_SIZE = {"clock": (0.24, 0.20), "system": (0.24, 0.26), "weather": (0.26,
                 "model": (0.28, 0.40), "image": (0.32, 0.38), "video": (0.36, 0.36),
                 "text": (0.30, 0.34), "guide": (0.34, 0.56)}
 
-HEADER = 0.045            # title bar height, screen units
+HEADER = 0.045            # title bar height, screen units (as drawn)
 DOCK_Y = 0.915            # the dock's centre line
 DOCK_R = 0.032            # a dock button's radius (in screen-height units)
 
+# Hit areas: bigger than what is drawn, because a hand cursor is never as
+# precise as a mouse. Drawing keeps HEADER and DOCK_R.
+HEADER_HIT = 0.065        # a pinch this far below a card's top counts as its title bar
+CLOSE_HIT = 0.055         # side of the square round the x glyph that closes a card
+DOCK_HIT = 1.6            # a dock button answers within DOCK_R * DOCK_HIT
+RING_HIT = 0.07           # a ring item answers within this (nearest wins)
+MAGNET = 0.035            # a hand cursor this near a button snaps toward it
+HOVER_FOCUS = 0.4         # seconds a hand rests over a card before it is "this"
+TRASH_S = 8.0             # seconds the Undo chip stays after a close
+
 GUIDE = [
-    "Carry a card: pinch its top bar, then open your fingers to drop it",
+    "Carry a card: pinch anywhere on it, then open your fingers to drop it",
     "Release while still moving to fling it; flung off the screen, it is dismissed",
-    "In a list, pinch and drag up or down to scroll",
+    "Close a card: hold an open hand still over it, then make a fist",
+    "Closed one by mistake? Pinch 'Undo close' above the dock, or say 'bring it back'",
+    "In a list, pinch and drag up or down to scroll, or hold up two fingers and move",
     "Resize: pinch the same card with both hands and spread or close them",
     "Bring a held card closer to the camera to enlarge it",
     "Hide everything: bring two open hands together quickly; spread them again to show it all",
     "New card: keep a pinch still on empty space until a circle of choices appears",
-    "Tap with a short pinch to press buttons, headlines and notes",
-    "Aim your index finger at a card, then say 'read this', 'close this' or 'make this bigger'",
+    "Tap with a short pinch to press buttons, headlines and notes; near a button the cursor snaps to it",
+    "Aim your index finger at a card (or rest your hand on it), then say 'read this', 'close this' or 'make this bigger'",
     "Holding the 3D model, twist your wrist to spin it",
     "With a mouse: drag a top bar, roll the wheel to resize, Esc closes the desk",
 ]
@@ -96,10 +132,18 @@ class Panel:
         return self.x <= px <= self.x + self.w and self.y <= py <= self.y + self.h
 
     def on_header(self, px: float, py: float) -> bool:
-        return self.x <= px <= self.x + self.w and self.y <= py <= self.y + HEADER
+        """Hit test only (HEADER_HIT is taller than the drawn bar)."""
+        return self.x <= px <= self.x + self.w and self.y <= py <= self.y + HEADER_HIT
+
+    def close_center(self) -> tuple:
+        """Where the x glyph is drawn."""
+        return self.x + self.w - HEADER / 2, self.y + HEADER / 2
 
     def on_close(self, px: float, py: float) -> bool:
-        return self.on_header(px, py) and px >= self.x + self.w - HEADER
+        """A square of CLOSE_HIT round the x glyph (it may reach a little past
+        the card's edge: a hand aims at the glyph, not at the card)."""
+        cx, cy = self.close_center()
+        return abs(px - cx) <= CLOSE_HIT / 2 and abs(py - cy) <= CLOSE_HIT / 2
 
     def heading(self) -> str:
         if self.title:
@@ -157,11 +201,15 @@ class Desk:
     FRICTION = 2.6            # per second: a throw slows to ~7% in a second
     SNAP = 0.025              # a dropped panel this close to an edge sticks to it
     VANISH = 0.35             # seconds a closing panel takes to fade
+    TRASH_S = TRASH_S         # the Undo chip's life after a close
+    TRASH_KEEP = 5            # closed cards kept for reopen(), this session only
 
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self.lock = threading.RLock()
         self.panels: list[Panel] = []
         self.hidden: list[Panel] = []        # put away by clear / clap
+        self.trash: list[tuple] = []         # [(Panel, closed at)], oldest first
+        self._closes = 0                     # counts every close, for Input's Undo chip
         self.focused: Optional[int] = None   # "this"
         self.mode = "camera"                 # camera | overlay
         self._next = 1
@@ -252,17 +300,51 @@ class Desk:
             self.panels.remove(p)
             self.panels.append(p)
 
-    def close(self, pid: int) -> bool:
+    def close(self, pid: int, trash: bool = True) -> bool:
+        """Fade a card out. With `trash`, it can come back with reopen()."""
         with self.lock:
             p = self.get(pid)
             if p is None:
                 return False
             p.gone = self._clock()
             p.held = False
+            if trash:
+                self._to_trash(p, p.gone)
             if self.focused == pid:
                 alive = [q for q in self.live() if q.pid != pid]
                 self.focused = alive[-1].pid if alive else None
             return True
+
+    def _to_trash(self, p: Panel, now: float) -> None:
+        self.trash = [e for e in self.trash if e[0] is not p] + [(p, now)]
+        del self.trash[:-self.TRASH_KEEP]
+        self._closes += 1
+
+    def reopen(self, pid: Optional[int] = None) -> Optional[Panel]:
+        """Bring back the newest closed card (or the closed card `pid`).
+        Returns it, or None when there is nothing to bring back."""
+        with self.lock:
+            entry = None
+            for e in reversed(self.trash):
+                if pid is None or e[0].pid == pid:
+                    entry = e
+                    break
+            if entry is None:
+                return None
+            p = entry[0]
+            self.trash.remove(entry)
+            p.gone, p.born, p.held = 0.0, self._clock(), False
+            p.vx = p.vy = 0.0
+            self._keep_on_screen(p)
+            # A card thrown off the screen comes back whole, not half outside.
+            p.x = min(max(p.x, 0.0), max(0.0, 1.0 - p.w))
+            p.y = min(max(p.y, 0.0), max(0.0, 1.0 - p.h))
+            if p in self.panels:
+                self._raise(p)
+            else:
+                self.panels.append(p)
+            self.focused = p.pid
+            return p
 
     def resize(self, pid: int, factor: float, center: Optional[tuple] = None) -> None:
         with self.lock:
@@ -362,6 +444,7 @@ class Desk:
                 if off:
                     p.gone = now
                     p.vx = p.vy = 0.0
+                    self._to_trash(p, now)
                     if self.focused == p.pid:
                         self.focused = None
                     events.append(("closed", p.pid))
@@ -420,12 +503,18 @@ class Pointer:
     pointing: bool = False
     pinch: float = 0.0          # 0 = open .. 1 = pinched, for the cursor
     pts: Optional[list] = None  # the hand's 21 points on the screen, for the skeleton
+    pose: str = ""              # voted pose (plugins/_gesture_core.POSES); "" for the mouse
+    state: str = ""             # the index pinch: open | armed | pressed; "" for the mouse
+    vx: float = 0.0             # filtered velocity, screen units / s
+    vy: float = 0.0
+    conf: float = 1.0           # the tracker's confidence in this hand
+    lost: bool = False          # held through a tracking dropout (no hand this frame)
 
 
 @dataclass
 class _Grip:
     """What one pointer is doing since its pinch began."""
-    mode: str                   # move | scroll | resize | hold | ring | dock | tap
+    mode: str                   # move | scroll | decide | resize | hold | ring | dock | tap | chip
     t0: float
     x0: float
     y0: float
@@ -439,7 +528,8 @@ class _Grip:
     item: str = ""
     moved: float = 0.0
     d0: float = 0.0             # two-hand resize: starting distance
-    trail: deque = field(default_factory=lambda: deque(maxlen=8))
+    # ~0.4 s at the window's 60 Hz tick: enough for the throw window below.
+    trail: deque = field(default_factory=lambda: deque(maxlen=24))
 
 
 class Input:
@@ -447,7 +537,10 @@ class Input:
     frame; it returns events for sounds and effects:
         ("grab", pid) ("drop", pid) ("throw", pid) ("tap", x, y) ("press", kind)
         ("ring", x, y) ("added", pid) ("scroll", pid) ("resize", pid)
-        ("clap", n) ("restore", n) ("focus", pid) ("closed", pid)
+        ("clap", n) ("restore", n) ("focus", pid) ("closed", pid) ("row", pid, i)
+        ("armed", pid) ("crushed", pid) ("reopened", pid)
+    (pid = a panel's id.) For drawing: hover, ring, cursor_at(), crush_marks(),
+    undo_chip(), hold_progress(), v_scroll.
     """
 
     TAP_TIME = 0.35
@@ -456,14 +549,36 @@ class Input:
     RING_R = 0.11
     FLING = 1.1               # screen units / s: faster than this on release is a throw
     ROW_H = 0.032             # one list row, screen units (the window draws to match)
+    # A throw is measured on [release - THROW_SPAN, release - THROW_SKIP]: the
+    # last 50 ms are the fingers opening, which moves the cursor but is not a throw.
+    THROW_SPAN = 0.20
+    THROW_SKIP = 0.05
+    # A pinch on a list's body is a scroll or a carry; the first motion decides.
+    DECIDE_MOVE = 0.015
+    DECIDE_HOLD = 0.35        # ... or holding still this long picks the card up
+    V_DWELL = 0.15            # two fingers this long over a list before it scrolls
+    CRUSH_MARGIN = 0.03       # how far outside the card a crushing hand may drift
+    MAGNET_PULL = 0.6         # the drawn cursor moves this share of the way to a lit button
+    MAGNET_KEEP = 1.4         # a lit button stays lit until MAGNET * this
+    CHIP = (0.5 - 0.08, DOCK_Y - 0.10, 0.16, 0.05)    # the Undo chip: x, y, w, h
 
     def __init__(self, desk: Desk):
         self.desk = desk
         self.grips: dict[str, _Grip] = {}
         self.ring: Optional[dict] = None     # {"x", "y", "items", "hover", "owner"}
         self.hover: dict[str, tuple] = {}    # pointer id -> (x, y, what)
+        self.v_scroll: dict[str, int] = {}   # pointer id -> panel scrolled with two fingers
         self._palms: deque = deque(maxlen=30)   # (t, distance) while two open palms
         self._cleared_at = 0.0
+        self._pos: dict[str, tuple] = {}     # pointer id -> (x, y) this frame
+        self._lit: dict[str, tuple] = {}     # pointer id -> (what, cx, cy): the magnet's target
+        self._dwell: dict[str, list] = {}    # pointer id -> [panel, since, done]: hover focus
+        self._v: dict[str, dict] = {}        # pointer id -> {"y0", "scroll0"} while V-scrolling
+        self._v_wait: dict[str, tuple] = {}  # pointer id -> (panel, since): V before it counts
+        self._crush: dict[str, dict] = {}    # pointer id -> crush detector and its card
+        self._crush_missing = False
+        self._chip_at = 0.0                  # when the last close happened (0 = no chip)
+        self._closes_seen = getattr(desk, "_closes", 0)
 
     # ── helpers ──────────────────────────────────────────────────────────────
     @staticmethod
@@ -475,10 +590,12 @@ class Input:
         return [(k, x0 + i * span, DOCK_Y) for i, k in enumerate(DOCK)]
 
     def dock_at(self, x: float, y: float) -> str:
+        best, bd = "", DOCK_R * DOCK_HIT
         for k, dx, dy in self.dock_items():
-            if math.hypot((x - dx) * 1.7, y - dy) < DOCK_R * 1.3:
-                return k
-        return ""
+            d = math.hypot((x - dx) * 1.7, y - dy)
+            if d < bd:
+                best, bd = k, d
+        return best
 
     def ring_items(self, cx: float, cy: float) -> list:
         n = len(RING)
@@ -496,7 +613,79 @@ class Input:
             d = math.hypot((x - rx) * 1.7, y - ry)
             if d < bd:
                 best, bd = k, d
-        return best if bd < 0.05 else ""
+        return best if bd < RING_HIT else ""
+
+    def _close_at(self, x: float, y: float) -> Optional[Panel]:
+        """The card whose x the point is on (its hit square may reach just past
+        the card's edge), unless another card covers that spot."""
+        with self.desk.lock:
+            for q in reversed(self.desk.panels):
+                if q.gone:
+                    continue
+                if q.on_close(x, y):
+                    return q
+                if q.contains(x, y):
+                    return None
+        return None
+
+    def undo_chip(self, t: float) -> Optional[dict]:
+        """The 'Undo close' chip above the dock, for TRASH_S after a close."""
+        if not self._chip_at or not self.desk.trash:
+            return None
+        left = min(TRASH_S, TRASH_S - (t - self._chip_at))
+        if left <= 0:
+            return None
+        x, y, w, h = self.CHIP
+        return {"x": x, "y": y, "w": w, "h": h, "label": "Undo close", "left": left}
+
+    def _on_chip(self, x: float, y: float, t: float) -> bool:
+        chip = self.undo_chip(t)
+        if chip is None:
+            return False
+        m = 0.01
+        return (chip["x"] - m <= x <= chip["x"] + chip["w"] + m
+                and chip["y"] - m <= y <= chip["y"] + chip["h"] + m)
+
+    def _targets(self, t: float) -> list:
+        """Everything a hand cursor snaps to: (what, cx, cy, x-scale)."""
+        out = [("dock:" + k, dx, dy, 1.7) for k, dx, dy in self.dock_items()]
+        for panel in self.desk.live():
+            cx, cy = panel.close_center()
+            if self.desk.at(cx, cy) is panel:          # not under another card
+                out.append((f"close:{panel.pid}", cx, cy, 1.0))
+        if self.ring:
+            out += [("ring:" + k, rx, ry, 1.7) for k, rx, ry in self.ring["items"]]
+        chip = self.undo_chip(t)
+        if chip is not None:
+            out.append(("chip", chip["x"] + chip["w"] / 2, chip["y"] + chip["h"] / 2, 1.0))
+        return out
+
+    def cursor_at(self, pointer_id: str) -> Optional[tuple]:
+        """Where to DRAW a pointer's cursor: pulled toward the button it lit."""
+        pos = self._pos.get(pointer_id)
+        if pos is None:
+            return None
+        lit = self._lit.get(pointer_id)
+        if not lit:
+            return pos
+        k = self.MAGNET_PULL
+        return pos[0] + k * (lit[1] - pos[0]), pos[1] + k * (lit[2] - pos[1])
+
+    def crush_marks(self, t: float) -> list:
+        """Crushes under way, for drawing: the armed card's red edge, the
+        closing arc."""
+        out = []
+        for pid, st in self._crush.items():
+            if st["phase"] == "armed":
+                window = getattr(st["det"], "WINDOW", 0.8) or 0.8
+                prog = min(1.0, max(0.0, (t - st["t_armed"]) / window))
+            elif st["phase"] == "closing":
+                prog = min(1.0, max(0.0, st["progress"]))
+            else:
+                continue
+            out.append({"pointer": pid, "panel": st["panel"], "phase": st["phase"],
+                        "progress": prog})
+        return out
 
     # ── the frame ────────────────────────────────────────────────────────────
     def update(self, pointers: list, t: float) -> list:
@@ -504,42 +693,116 @@ class Input:
         seen = set()
         for p in pointers:
             seen.add(p.pid)
+            self._pos[p.pid] = (p.x, p.y)
             g = self.grips.get(p.pid)
             if p.down and g is None:
                 self._press(p, t, events)
+                self._lit.pop(p.pid, None)
             elif p.down and g is not None:
                 self._drag(p, g, t, events)
             elif not p.down and g is not None:
                 self._release(p, g, t, events)
             if not p.down:
-                self._hover(p, events)
+                self._magnet(p, t)
+                self._hover(p, t, events)
+            if not getattr(p, "lost", False):
+                self._two_fingers(p, t, events)
+                self._crush_step(p, t, events)
         for gone in [k for k in self.grips if k not in seen]:
             g = self.grips[gone]
             self._release(None, g, t, events, lost=gone)
-        for k in [k for k in self.hover if k not in seen]:
-            del self.hover[k]
+        for table in (self.hover, self._pos, self._lit, self._dwell, self.v_scroll, self._v,
+                      self._v_wait, self._crush):
+            for k in [k for k in table if k not in seen]:
+                del table[k]
         self._two_hands(pointers, t, events)
         self._clap(pointers, t, events)
         if self.ring and self.ring.get("owner") not in self.grips:
             self.ring = None
+        # Every close (x, crush, a throw off the screen, a voice command) shows
+        # the Undo chip. Desk.step's closes come after this call, so they are
+        # picked up on the next frame.
+        closes = getattr(self.desk, "_closes", 0)
+        if closes != self._closes_seen:
+            self._closes_seen = closes
+            self._chip_at = t
         return events
 
-    def _hover(self, p: Pointer, events: list) -> None:
-        what = ""
-        if self.dock_at(p.x, p.y):
-            what = "dock:" + self.dock_at(p.x, p.y)
+    def _magnet(self, p: Pointer, t: float) -> None:
+        """Light the button a hand cursor is near; keep it lit until the hand
+        is clearly away (MAGNET_KEEP), so two neighbours never flicker."""
+        if not p.size:                       # the mouse is precise enough as it is
+            self._lit.pop(p.pid, None)
+            return
+        targets = self._targets(t)
+
+        def dist(tg):
+            return math.hypot((p.x - tg[1]) * tg[3], p.y - tg[2])
+
+        cur = self._lit.get(p.pid)
+        if cur:
+            same = next((tg for tg in targets if tg[0] == cur[0]), None)
+            if same is not None and dist(same) <= MAGNET * self.MAGNET_KEEP:
+                self._lit[p.pid] = same[:3]
+                return
+        best = min(targets, key=dist, default=None)
+        if best is not None and dist(best) <= MAGNET:
+            self._lit[p.pid] = best[:3]
         else:
-            panel = self.desk.at(p.x, p.y)
-            if panel is not None:
-                what = f"panel:{panel.pid}"
-                if p.pointing and self.desk.focused != panel.pid:
-                    self.desk.focused = panel.pid
-                    events.append(("focus", panel.pid))
+            self._lit.pop(p.pid, None)
+
+    def _focus(self, panel: Panel, events: list) -> None:
+        if self.desk.focused != panel.pid:
+            self.desk.focused = panel.pid
+            events.append(("focus", panel.pid))
+
+    def _hover(self, p: Pointer, t: float, events: list) -> None:
+        lit = self._lit.get(p.pid)
+        panel = self.desk.at(p.x, p.y)
+        dock = "" if lit else self.dock_at(p.x, p.y)
+        if lit:
+            what = lit[0]
+        elif self._on_chip(p.x, p.y, t):
+            what = "chip"
+        elif dock:
+            what = "dock:" + dock
+        elif panel is not None:
+            what = f"panel:{panel.pid}"
+        else:
+            what = ""
+        if panel is not None and not dock:
+            if p.pointing:
+                self._focus(panel, events)
+            elif p.size:
+                # Resting a hand over a card makes it "this" too.
+                d = self._dwell.get(p.pid)
+                if d is None or d[0] != panel.pid:
+                    self._dwell[p.pid] = [panel.pid, t, False]
+                elif not d[2] and t - d[1] >= HOVER_FOCUS:
+                    d[2] = True
+                    self._focus(panel, events)
+        else:
+            self._dwell.pop(p.pid, None)
         self.hover[p.pid] = (p.x, p.y, what)
 
     def _press(self, p: Pointer, t: float, events: list) -> None:
         desk = self.desk
-        kind = self.dock_at(p.x, p.y)
+        lit = self._lit.get(p.pid)
+        what = lit[0] if lit else ""
+        # The target lit on the last open frame, unless the pinch landed
+        # clearly elsewhere (the hand jumped, or it is the ring's: only the
+        # ring's owner picks from it).
+        if what.startswith("ring:") or (lit and math.hypot(
+                (p.x - lit[1]) * (1.7 if what.startswith("dock:") else 1.0),
+                p.y - lit[2]) > MAGNET * self.MAGNET_KEEP):
+            what = ""
+        if what == "chip" or (not what and self._on_chip(p.x, p.y, t)):
+            self.grips[p.pid] = _Grip("chip", t, p.x, p.y)
+            return
+        if what.startswith("dock:"):
+            kind = what[5:]
+        else:
+            kind = "" if what else self.dock_at(p.x, p.y)
         if kind:
             self.grips[p.pid] = _Grip("dock", t, p.x, p.y, item=kind)
             return
@@ -547,36 +810,65 @@ class Input:
         # A second hand on a panel the first already holds: resize with both.
         if panel is not None:
             holder = next((g for k, g in self.grips.items()
-                           if g.panel == panel.pid and g.mode in ("move", "scroll", "tap")), None)
+                           if g.panel == panel.pid
+                           and g.mode in ("move", "scroll", "decide", "tap")), None)
             if holder is not None:
                 self.grips[p.pid] = _Grip("resize", t, p.x, p.y, panel=panel.pid, w0=panel.w)
                 holder.mode = "resize"
+                # A holder that was a tap on the x is a resize grip now, not a
+                # pending close: it must neither close the card on release nor
+                # turn into a carry when it moves.
+                holder.item = ""
                 return
+        shut = None
+        if what.startswith("close:"):
+            try:
+                shut = desk.get(int(what[6:]))
+            except ValueError:
+                shut = None
+        if shut is None:
+            shut = self._close_at(p.x, p.y)
+        if shut is not None:
+            with desk.lock:
+                desk._raise(shut)
+                desk.focused = shut.pid
+                shut.vx = shut.vy = 0.0
+            self.grips[p.pid] = _Grip("tap", t, p.x, p.y, panel=shut.pid, item="close",
+                                      size0=p.size, angle0=p.angle)
+            return
         if panel is not None:
             with desk.lock:
                 desk._raise(panel)
                 desk.focused = panel.pid
                 panel.vx = panel.vy = 0.0
-            if panel.on_close(p.x, p.y):
-                self.grips[p.pid] = _Grip("tap", t, p.x, p.y, panel=panel.pid, item="close")
-                return
             if panel.kind in LIST_KINDS and not panel.on_header(p.x, p.y) and panel.rows:
-                self.grips[p.pid] = _Grip("scroll", t, p.x, p.y, panel=panel.pid,
-                                          scroll0=panel.scroll)
+                # Scroll or carry? The first motion (or holding still) decides.
+                g = _Grip("decide", t, p.x, p.y, panel=panel.pid, scroll0=panel.scroll)
+                g.trail.append((t, p.x, p.y))
+                self.grips[p.pid] = g
                 return
-            panel.held = True
-            g = _Grip("move", t, p.x, p.y, panel=panel.pid, off=(p.x - panel.x, p.y - panel.y),
-                      size0=p.size, w0=panel.w, angle0=p.angle, yaw0=panel.yaw)
+            g = _Grip("move", t, p.x, p.y, panel=panel.pid)
             g.trail.append((t, p.x, p.y))
             self.grips[p.pid] = g
-            events.append(("grab", panel.pid))
+            self._start_move(p, g, panel, events)
             return
         self.grips[p.pid] = _Grip("hold", t, p.x, p.y)
+
+    def _start_move(self, p: Pointer, g: _Grip, panel: Panel, events: list) -> None:
+        """The pointer now carries the panel, held where the pinch began."""
+        with self.desk.lock:
+            panel.held = True
+        g.mode, g.item = "move", ""
+        g.off = (g.x0 - panel.x, g.y0 - panel.y)
+        g.size0, g.w0, g.angle0, g.yaw0 = p.size, panel.w, p.angle, panel.yaw
+        events.append(("grab", panel.pid))
 
     def _drag(self, p: Pointer, g: _Grip, t: float, events: list) -> None:
         desk = self.desk
         g.moved = max(g.moved, math.hypot(p.x - g.x0, p.y - g.y0))
         g.trail.append((t, p.x, p.y))
+        if g.mode == "chip":
+            return
         if g.mode == "hold":
             if g.moved > self.TAP_MOVE * 1.5:
                 g.mode = "tap"            # moved off: just a press on empty space
@@ -603,6 +895,26 @@ class Input:
         panel = desk.get(g.panel)
         if panel is None:
             return
+        if g.item == "close":
+            # A pinch on the x that then moves off carries the card instead.
+            if g.moved > self.TAP_MOVE * 1.5:
+                self._start_move(p, g, panel, events)
+            else:
+                return
+        if g.mode == "decide":
+            dx, dy = p.x - g.x0, p.y - g.y0
+            # The decision is total: once the hand has moved, mostly vertical
+            # scrolls and anything else carries (a diagonal pull used to stay
+            # undecided for the whole gesture and do nothing).
+            if math.hypot(dx, dy) >= self.DECIDE_MOVE:
+                if abs(dy) >= abs(dx):
+                    g.mode = "scroll"
+                else:
+                    self._start_move(p, g, panel, events)
+            elif t - g.t0 >= self.DECIDE_HOLD:
+                self._start_move(p, g, panel, events)
+            if g.mode == "decide":
+                return
         if g.mode == "scroll":
             with desk.lock:
                 panel.scroll = min(max(0.0, g.scroll0 + (g.y0 - p.y) / self.ROW_H),
@@ -632,6 +944,13 @@ class Input:
         key = p.pid if p is not None else lost
         self.grips.pop(key, None)
         quick = t - g.t0 <= self.TAP_TIME and g.moved <= self.TAP_MOVE
+        if g.mode == "chip":
+            if p is not None and quick:
+                panel = desk.reopen()
+                self._chip_at = 0.0
+                if panel is not None:
+                    events.append(("reopened", panel.pid))
+            return
         if g.mode == "dock":
             if p is not None:
                 panel = desk.add(g.item)
@@ -657,7 +976,7 @@ class Input:
             if quick and desk.close(panel.pid):
                 events.append(("closed", panel.pid))
             return
-        if g.mode == "scroll":
+        if g.mode in ("scroll", "decide"):
             if quick:
                 events.append(("tap", g.x0, g.y0))
                 events.append(("row", panel.pid, self.row_at(panel, g.y0)))
@@ -700,15 +1019,124 @@ class Input:
         i = int((y - panel.y - HEADER - 0.01) / self.ROW_H + panel.scroll)
         return i if 0 <= i < len(panel.rows) else -1
 
-    @staticmethod
-    def _velocity(trail) -> tuple:
-        pts = [q for q in trail if trail and trail[-1][0] - q[0] <= 0.15]
+    @classmethod
+    def _velocity(cls, trail) -> tuple:
+        """Release speed, leaving out the last THROW_SKIP s (the fingers
+        opening). A grip too short for that window falls back to the last
+        0.15 s."""
+        if not trail:
+            return 0.0, 0.0
+        end = trail[-1][0]
+        eps = 1e-6
+        pts = [q for q in trail
+               if end - cls.THROW_SPAN - eps <= q[0] <= end - cls.THROW_SKIP + eps]
+        if len(pts) < 2:
+            pts = [q for q in trail if end - q[0] <= 0.15]
         if len(pts) < 2:
             return 0.0, 0.0
         dt = pts[-1][0] - pts[0][0]
         if dt <= 1e-3:
             return 0.0, 0.0
         return (pts[-1][1] - pts[0][1]) / dt, (pts[-1][2] - pts[0][2]) / dt
+
+    # ── poses beyond the pinch ───────────────────────────────────────────────
+    def _two_fingers(self, p: Pointer, t: float, events: list) -> None:
+        """Two fingers (V) held over a list's body scroll it with the hand."""
+        if not p.size or p.down or getattr(p, "pose", "") != "v":
+            self._v_wait.pop(p.pid, None)
+            self.v_scroll.pop(p.pid, None)
+            self._v.pop(p.pid, None)
+            return
+        desk = self.desk
+        if p.pid in self.v_scroll:
+            panel = desk.get(self.v_scroll[p.pid])
+            st = self._v.get(p.pid)
+            if panel is None or st is None:
+                self.v_scroll.pop(p.pid, None)
+                self._v.pop(p.pid, None)
+                return
+            with desk.lock:
+                panel.scroll = min(max(0.0, st["scroll0"] + (st["y0"] - p.y) / self.ROW_H),
+                                   max(0, len(panel.rows) - 1))
+            return
+        panel = desk.at(p.x, p.y)
+        if (panel is None or panel.kind not in LIST_KINDS or not panel.rows
+                or panel.on_header(p.x, p.y)):
+            self._v_wait.pop(p.pid, None)
+            return
+        wait = self._v_wait.get(p.pid)
+        if wait is None or wait[0] != panel.pid:
+            self._v_wait[p.pid] = (panel.pid, t)
+            return
+        if t - wait[1] < self.V_DWELL:
+            return
+        self.v_scroll[p.pid] = panel.pid
+        self._v[p.pid] = {"y0": p.y, "scroll0": panel.scroll}
+        events.append(("scroll", panel.pid))
+
+    def _new_crush(self):
+        try:
+            from plugins import _gesture_core
+            return _gesture_core.CrushDetector(confirm=0.25)
+        except Exception as e:
+            if not self._crush_missing:
+                self._crush_missing = True
+                print(f"[HoloDesk] the close gesture is off: {e}")
+            return None
+
+    def _crush_reset(self, st: dict) -> None:
+        try:
+            st["det"].reset()
+        except Exception:
+            pass
+        st.update(phase="idle", panel=None, progress=0.0)
+
+    def _crush_step(self, p: Pointer, t: float, events: list) -> None:
+        """Open hand held still over a card, then a fist: the card closes."""
+        st = self._crush.get(p.pid)
+        if not p.size or p.down or not getattr(p, "pose", ""):
+            if st is not None and st["phase"] != "idle":
+                self._crush_reset(st)
+            return
+        if st is None:
+            det = self._new_crush()
+            if det is None:
+                return
+            st = self._crush[p.pid] = {"det": det, "panel": None, "phase": "idle",
+                                       "progress": 0.0, "t_armed": 0.0}
+        try:
+            phase, prog = st["det"].update(p.pose, p.x, p.y,
+                                           math.hypot(getattr(p, "vx", 0.0),
+                                                      getattr(p, "vy", 0.0)), t)
+        except Exception as e:
+            print(f"[HoloDesk] close gesture: {e}")
+            self._crush_reset(st)
+            return
+        desk = self.desk
+        if phase in ("armed", "closing"):
+            if st["panel"] is None:
+                target = desk.at(p.x, p.y)
+                if target is None:
+                    self._crush_reset(st)
+                    return
+                st.update(panel=target.pid, t_armed=t)
+                events.append(("armed", target.pid))
+            panel = desk.get(st["panel"])
+            m = self.CRUSH_MARGIN
+            if panel is None or not (panel.x - m <= p.x <= panel.x + panel.w + m
+                                     and panel.y - m <= p.y <= panel.y + panel.h + m):
+                self._crush_reset(st)
+                return
+            st.update(phase=phase, progress=prog)
+            return
+        if phase == "fired":
+            pid = st["panel"]
+            st.update(phase="idle", panel=None, progress=0.0)
+            if pid is not None and desk.close(pid):
+                events.append(("crushed", pid))
+                events.append(("closed", pid))
+            return
+        st.update(phase="idle", panel=None, progress=0.0)      # idle or cancelled
 
     def _two_hands(self, pointers: list, t: float, events: list) -> None:
         """Both hands on one panel: their distance sets its size."""
@@ -772,81 +1200,58 @@ class Input:
 class HandFilter:
     """Tracked hands (plugins/_hands_onnx.Hand) -> steady Pointers.
 
-    Keeps up to two hands in stable slots (nearest to where each was), smooths
-    the jitter the landmark model has from frame to frame, and decides "pinched"
-    with hysteresis so a pinch on the edge does not flicker on and off."""
-
-    # (pinch on, pinch off) as a thumb-index gap in palm sizes. "gentle"
-    # counts a looser pinch; "firm" wants the fingers really together.
-    SENSITIVITY = {"gentle": (0.40, 0.58), "normal": (0.33, 0.50), "firm": (0.27, 0.42)}
-    # Smoothing follows speed (the idea of the 1-euro filter): a still hand is
-    # smoothed hard so the cursor does not shiver, a fast one hardly at all so
-    # it does not lag behind a throw.
-    SMOOTH_SLOW = 0.25        # weight of the new position when still
-    SMOOTH_FAST = 0.85        # ... when moving fast
-    FAST = 1.5                # screen widths per second counted as "fast"
-    LOST = 0.25               # seconds a vanished hand keeps its slot (and its pinch)
+    A thin wrapper: the work (stable slots, One Euro smoothing once per camera
+    frame, the knuckle-anchored cursor, the debounced pinch, pose voting)
+    is plugins/_gesture_core.HandFilter with the "desk" profile, shared with
+    Air Control so both modes feel the same. This class keeps the old
+    signature the window calls and turns each HandState into a Pointer."""
 
     def __init__(self, sensitivity: str = "normal"):
-        self.slots: dict[str, dict] = {}
-        self.PINCH_ON, self.PINCH_OFF = self.SENSITIVITY.get(sensitivity,
-                                                             self.SENSITIVITY["normal"])
-
-    def _alpha(self, s: dict, cx: float, cy: float, t: float) -> float:
-        dt = max(1e-3, t - s.get("seen", t - 1 / 30))
-        speed = math.hypot(cx - s["x"], cy - s["y"]) / dt
-        k = min(1.0, speed / self.FAST)
-        return self.SMOOTH_SLOW + (self.SMOOTH_FAST - self.SMOOTH_SLOW) * k
+        self.states: list = []             # the HandStates behind the last result
+        self._inner = None
+        self._failed = False
+        self.PINCH_ON, self.PINCH_OFF = 0.30, 0.45
+        try:
+            from plugins import _gesture_core as gc
+            sens = str(sensitivity or "normal").strip().lower()
+            if sens not in getattr(gc, "SENSITIVITY", {}):
+                sens = "normal"
+            self._inner = gc.HandFilter(sens, profile="desk", max_hands=2)
+            self.PINCH_ON, self.PINCH_OFF = self._inner.on, self._inner.off
+        except Exception as e:
+            print(f"[HoloDesk] hand tracking filter unavailable: {e}")
 
     def update(self, hands: list, to_screen: Callable[[float, float], tuple],
                t: float) -> list:
-        out, taken = [], set()
-        for hand in hands[:2]:
-            cx, cy = to_screen(*hand.pinch_point)
-            best, bd = None, 0.25
-            for k, s in self.slots.items():
-                d = math.hypot(s["x"] - cx, s["y"] - cy)
-                if k not in taken and d < bd:
-                    best, bd = k, d
-            if best is None:
-                best = next((k for k in ("h0", "h1") if k not in self.slots and k not in taken),
-                            None) or next(k for k in ("h0", "h1") if k not in taken)
-                self.slots[best] = {"x": cx, "y": cy, "down": False, "angle": hand.angle,
-                                    "size": hand.size}
-            taken.add(best)
-            s = self.slots[best]
-            a = self._alpha(s, cx, cy, t)
-            s["x"] += (cx - s["x"]) * a
-            s["y"] += (cy - s["y"]) * a
-            s["size"] += (hand.size - s["size"]) * a
-            s["angle"] += _wrap(hand.angle - s["angle"]) * a
-            s["seen"] = t
-            r = hand.pinch_ratio
-            s["down"] = r < (self.PINCH_OFF if s["down"] else self.PINCH_ON)
-            # 0 = fingers wide open, 1 = pinched: drawn by the cursor, so the
-            # user sees how close a pinch is before it counts.
-            closeness = min(1.0, max(0.0, (1.0 - r) / (1.0 - self.PINCH_ON)))
-            pts = getattr(hand, "pts", None)
-            out.append(Pointer(best, s["x"], s["y"], s["down"], size=max(s["size"], 1e-3),
-                               angle=s["angle"], open_palm=hand.open_palm and not s["down"],
-                               pointing=hand.pointing and not s["down"],
-                               pinch=1.0 if s["down"] else closeness,
-                               pts=[to_screen(*q) for q in pts] if pts else None))
-        for k in list(self.slots):
-            s = self.slots[k]
-            if k in taken:
-                continue
-            if t - s.get("seen", t) > self.LOST:
-                del self.slots[k]
-            elif s["down"]:
-                # Tracking drops a frame now and then; letting go there would
-                # throw whatever the hand is carrying.
-                out.append(Pointer(k, s["x"], s["y"], True, size=s["size"], angle=s["angle"]))
-        return out
+        """Call once per camera frame with its capture time `t` (a repeat with
+        the same t returns the same pointers)."""
+        if self._inner is None:
+            return []
+        try:
+            states = list(self._inner.update(hands, t, to_screen) or [])
+        except Exception as e:
+            if not self._failed:
+                self._failed = True
+                print(f"[HoloDesk] hand filter failed: {e}")
+            return []
+        self.states = states
+        return [self._pointer(s) for s in states]
 
-
-def _wrap(a: float) -> float:
-    return (a + math.pi) % (2 * math.pi) - math.pi
+    @staticmethod
+    def _pointer(s) -> Pointer:
+        g = lambda k, d: getattr(s, k, d)          # noqa: E731 - duck-typed HandState
+        down = bool(g("down", False))
+        pose = str(g("pose", "") or "")
+        return Pointer(str(g("slot", "h0")), float(g("x", 0.0)), float(g("y", 0.0)), down,
+                       size=max(float(g("size", 0.0) or 0.0), 1e-3),
+                       angle=float(g("angle", 0.0) or 0.0),
+                       open_palm=pose == "open" and not down,
+                       pointing=pose == "point" and not down,
+                       pinch=float(g("closeness", 0.0) or 0.0),
+                       pts=g("pts", None), pose=pose, state=str(g("pinch", "") or ""),
+                       vx=float(g("vx", 0.0) or 0.0), vy=float(g("vy", 0.0) or 0.0),
+                       conf=float(g("conf", 1.0) if g("conf", 1.0) is not None else 1.0),
+                       lost=bool(g("lost", False)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
