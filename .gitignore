@@ -64,6 +64,8 @@ screenshots/
 memory/plugin_data/
 # recorded "on it" lines in the user's own voice (core/on_it.py)
 memory/on_it/
+# words for ranges, sums and clock times in the user's languages (providers/_speakable.py)
+memory/speech_words.json
 
 # ── Plugins the user added through the Plugin Manager (their own files) ─────
 user_plugins/

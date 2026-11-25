@@ -85,6 +85,10 @@ def _match_voice(wanted: str, voices: list[tuple[str, str]]) -> str:
 
 
 class ElevenLabsTTS:
+    # Reads numbers, money and units well by itself in every language it
+    # speaks, so providers/_speakable.py leaves its text alone.
+    SPEAKS_NUMBERS = True
+
     def __init__(self, cfg: dict):
         self.key = (cfg.get("api_key") or "").strip()
         self.voice_id = (cfg.get("voice_id") or "").strip()

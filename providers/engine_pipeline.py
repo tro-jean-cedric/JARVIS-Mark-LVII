@@ -592,6 +592,29 @@ class PipelineEngine:
             await self._emit(Msg.said(_failure_line("the language model", e)))
             await self._emit(Msg.turn_end())
 
+    def _numbers_as_words(self, text: str, language: str = "") -> str:
+        """`text` with its numbers spelt out. Language: what speech recognition
+        heard, else the single active language, else what this text is written
+        in (kept for the following sentences, which may be too short to tell).
+        Unchanged when the language is unknown. Never raises."""
+        try:
+            from . import _speakable
+            code = language
+            if not code:
+                from core import languages
+                act = languages.active()
+                if len(act) == 1:
+                    code = act[0]
+                else:
+                    found, confidence = languages.detect(text)
+                    if found and confidence >= 0.5 and (not act or found in act):
+                        self._number_language = found
+                    code = getattr(self, "_number_language", "")
+            return _speakable.speakable(text, code) if code else text
+        except Exception as e:
+            print(f"[Pipeline] numbers left as written: {e}")
+            return text
+
     async def _speak(self, text: str) -> None:
         if self._tts is None:
             return
@@ -608,6 +631,10 @@ class PipelineEngine:
         # it — this is the only place that knows both halves.
         kwargs = {}
         language = getattr(self._stt, "detected_language", "")
+        # Numbers, money, units, dates and times as words in that language
+        # (providers/_speakable.py), for voices that do not manage them.
+        if not getattr(self._tts, "SPEAKS_NUMBERS", False):
+            text = self._numbers_as_words(text, language)
         if language and _accepts_language(self._tts):
             kwargs["language"] = language
         try:

@@ -294,6 +294,22 @@ def check_speech_detector():
                   "turn after the pause (loudness-based; no model needed)"), ""
 
 
+def check_numbers():
+    """What a local voice is given to read: numbers and units as words."""
+    try:
+        import babel  # noqa: F401
+        import num2words  # noqa: F401
+    except Exception as e:
+        return FAIL, f"numbers cannot be said as words for local voices ({e.name} missing)", \
+            "pip install babel num2words"
+    from providers._speakable import speakable
+    de = speakable("Es sind 21 °C und es kostet 49,99 €.", "de")
+    fr = speakable("Il fait -3 °C.", "fr")
+    if "einundzwanzig Grad Celsius" in de and "neunundvierzig Euro" in de and "moins trois" in fr:
+        return PASS, f"local voices get numbers as words (\"{de}\")", ""
+    return FAIL, f"numbers came out as: {de!r} / {fr!r}", "pip install --upgrade babel num2words"
+
+
 def check_wake_word():
     from core import wake_word
     if not wake_word.is_installed():
@@ -394,6 +410,7 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("audio", check_audio, False),
     ("speaker_capture", check_speaker_capture, False),
     ("speech_detector", check_speech_detector, False),
+    ("numbers", check_numbers, False),
     ("wake_word", check_wake_word, False),
     ("screen", check_screen, False),
     ("app_files", check_app_files, False),
