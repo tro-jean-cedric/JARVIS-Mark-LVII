@@ -254,13 +254,32 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
     whatsapp_call.py applies to a phone that is already ringing.
     """
     try:
-        launcher = _LAUNCHERS[_SYSTEM]
-        requested = launcher(launcher_name)
-        if not requested and launcher_name.lower() != spoken.lower():
-            requested = launcher(spoken)
+        # Which installed program is meant? "le bloc-notes", "calculadora",
+        # "the photo editor" all name a real program the launcher would not
+        # find by those words (core/installed_apps.py). Resolved here, after
+        # the tool has already answered, so the model call costs the
+        # conversation nothing. None = fall back to the name as spoken.
+        requested, verify_name = False, spoken
+        try:
+            from core import installed_apps
+            app = installed_apps.resolve(spoken)
+        except Exception as exc:
+            app = None
+            print(f"[open_app] installed-apps lookup failed: {exc}")
+        if app is not None:
+            if app.name.lower() != spoken.lower():
+                _log(player, f"JARVIS: '{spoken}' is {app.name} on this computer.")
+            requested = installed_apps.launch(app)
+            verify_name = app.name
+
+        if not requested:
+            launcher = _LAUNCHERS[_SYSTEM]
+            requested = launcher(launcher_name)
+            if not requested and launcher_name.lower() != spoken.lower():
+                requested = launcher(spoken)
 
         appeared = appidentity.wait_for_launch(
-            spoken, before, timeout=_LAUNCH_TIMEOUT
+            verify_name, before, timeout=_LAUNCH_TIMEOUT
         )
         if appeared is not None:
             _log(player, f"JARVIS: {appeared.label} is open.")
