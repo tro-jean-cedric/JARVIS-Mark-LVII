@@ -80,7 +80,9 @@ PLUGIN_SETTINGS = {
     "title": "WHATSAPP CALLS",
     "fields": [
         {"key": "transport", "label": "How to reach WhatsApp", "type": "choice",
-         "options": ["auto", "desktop", "web"], "default": "auto"},
+         "options": ["auto", "desktop", "web", "chrome"], "default": "auto"},
+        # web = WhatsApp Web inside the JARVIS window (Chrome when Qt WebEngine
+        # is missing); chrome = always the separate Chrome/Edge window.
         {"key": "strict_match", "label": "Refuse to dial if the wrong chat opened", "type": "toggle",
          "default": True},
         {"key": "launch_wait", "label": "Seconds to wait after launching WhatsApp", "type": "text",

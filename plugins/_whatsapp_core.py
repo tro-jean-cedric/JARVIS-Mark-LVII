@@ -10,16 +10,22 @@ plugins/whatsapp_call.py (calls) and actions/send_message.py (messages):
     ok, reason = transport.hangup()
     sent, failure = transport.send_message_to("Mom", "on my way")
 
-THREE TRANSPORTS
+FOUR TRANSPORTS
     WindowsDesktop   the WhatsApp desktop app on Windows, read and driven through
                      the accessibility tree (pywinauto, UIA backend).
     MacDesktop       the WhatsApp desktop app on macOS, read and driven through
                      the Accessibility API (pyobjc) by its stable AXIdentifiers.
+    EmbeddedWebTransport
+                     WhatsApp Web in the WHATSAPP panel INSIDE the JARVIS
+                     window (Qt WebEngine, gui/whatsapp_web.py), profile in
+                     config/whatsapp_web_embedded/ (git-ignored: it IS a
+                     linked WhatsApp session). Used wherever WhatsApp Web is:
+                     on Linux, on Windows/macOS when the desktop app is not
+                     installed, and anywhere when set to 'web' in settings.
     WebTransport     WhatsApp Web in a real Chrome/Edge window driven by
-                     Playwright, with its own profile in config/whatsapp_web/
-                     (git-ignored: it IS a linked WhatsApp session). Used on
-                     Linux, on Windows/macOS when the desktop app is not
-                     installed, and anywhere when set in settings.
+                     Playwright, profile in config/whatsapp_web/. The fallback
+                     when Qt WebEngine is not installed, or when the setting
+                     is 'chrome'.
 
 THE RULE: NEVER ASSUME, ALWAYS READ BACK
     A wrong tap rings a real person. So the conversation that opened is read
@@ -551,6 +557,273 @@ class WebTransport(Transport):
             return self._w.do(work, 90)
         except Exception as e:
             return False, str(e)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  WhatsApp Web inside the JARVIS window (Qt WebEngine)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Each runs in the page as (fn)(arg) and returns JSON (gui/whatsapp_web.py).
+_FIELD_JS = r"""
+(a) => {
+  let el = null;
+  for (const s of a.sels) { el = document.querySelector(s); if (el) break; }
+  if (!el) return {found: false, text: ''};
+  el.focus();
+  if (a.click) el.click();
+  if (a.clear) {
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+  }
+  if (a.text) document.execCommand('insertText', false, a.text);
+  return {found: true, text: (el.innerText || el.value || '').trim()};
+}
+"""
+
+_TEXT_JS = r"""
+(sels) => {
+  for (const s of sels) {
+    const el = document.querySelector(s);
+    if (el) return (el.innerText || el.value || '').trim();
+  }
+  return null;
+}
+"""
+
+_ENTER_JS = r"""
+() => {
+  const el = document.activeElement;
+  if (!el) return false;
+  for (const type of ['keydown', 'keypress', 'keyup']) {
+    el.dispatchEvent(new KeyboardEvent(type, {key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+                                              bubbles: true, cancelable: true}));
+  }
+  return true;
+}
+"""
+
+# Pressed by exact accessible name; the name comes from _HEADER_JS /
+# _CALL_BUTTONS_JS, so it is one WhatsApp itself showed.
+_PRESS_JS = r"""
+(a) => {
+  const scope = a.header ? document.querySelector('#main header') : document;
+  if (!scope) return false;
+  for (const attr of ['aria-label', 'title']) {
+    for (const el of scope.querySelectorAll('[' + attr + ']')) {
+      if ((el.getAttribute(attr) || '').trim() !== a.name) continue;
+      (el.closest('button, [role="button"]') || el).click();
+      return true;
+    }
+  }
+  return false;
+}
+"""
+
+_SEND_BUTTON_JS = r"""
+() => {
+  const icon = document.querySelector('#main footer [data-icon*="send"]');
+  if (!icon) return false;
+  (icon.closest('button, [role="button"]') || icon).click();
+  return true;
+}
+"""
+
+_LOGGED_IN_JS = "() => !!document.querySelector('#side')"
+
+# Tags the message box the text went into. "Sent" means THAT box emptied: a
+# chat that re-renders swaps in a new, empty box, which proves nothing.
+_MARK_JS = r"""
+(a) => {
+  for (const s of a.sels) {
+    const el = document.querySelector(s);
+    if (el) { el.setAttribute('data-jarvis-send', a.mark); return true; }
+  }
+  return false;
+}
+"""
+
+
+class EmbeddedWebTransport(Transport):
+    """WhatsApp Web in the WHATSAPP panel of the JARVIS window. Every step
+    goes to the Qt thread through JarvisUI.whatsapp_web(); nothing here touches
+    Qt. Same rule as the others: read back, never assume."""
+
+    label = "WhatsApp Web (inside JARVIS)"
+
+    def __init__(self, host):
+        self._host = host
+        self._lock = threading.Lock()       # one conversation step at a time
+
+    # -- plumbing -------------------------------------------------------------
+    def _do(self, op: str, *args, timeout: float = 15.0):
+        return self._host.whatsapp_web(op, *args, timeout=timeout)
+
+    def _js(self, src: str, arg=None, timeout: float = 10.0):
+        return self._do("js", src, arg, timeout=timeout)
+
+    def _until(self, check, seconds: float):
+        """Poll `check()` until it is truthy or `seconds` pass; its last value."""
+        deadline = time.time() + seconds
+        while True:
+            try:
+                value = check()
+            except RuntimeError:
+                value = None                # the page was mid-navigation
+            if value or time.time() >= deadline:
+                return value
+            time.sleep(0.3)
+
+    def _ready(self, wait_s: float = 25.0) -> None:
+        state = self._do("ensure", True, timeout=20) or {}
+        if not state.get("ok"):
+            raise RuntimeError(state.get("why") or "WhatsApp Web could not start inside the app")
+        if not self._until(lambda: self._js(_LOGGED_IN_JS), wait_s):
+            raise RuntimeError("WhatsApp Web is not linked yet — the WHATSAPP panel in the JARVIS "
+                               "window shows a QR code; scan it from the phone (WhatsApp → Linked "
+                               "devices) and ask again")
+
+    def _type_into(self, selectors, text: str, what: str) -> tuple[bool, str]:
+        """Clear the first field matching `selectors`, type `text`, read it back."""
+        r = self._js(_FIELD_JS, {"sels": list(selectors), "click": True, "clear": True,
+                                 "text": text}) or {}
+        if not r.get("found"):
+            return False, f"the {what} was not found"
+        if fold(r.get("text")) == fold(text):
+            return True, ""
+        # The page ignored the editing command: type it the way an input
+        # method does, as real input to the focused field.
+        self._js(_FIELD_JS, {"sels": list(selectors), "click": False, "clear": True, "text": ""})
+        self._do("text", text)
+        if fold(self._js(_TEXT_JS, list(selectors))) == fold(text):
+            return True, ""
+        return False, f"the text did not reach the {what} exactly"
+
+    def _header(self) -> dict:
+        try:
+            return self._js(_HEADER_JS) or {}
+        except RuntimeError:
+            return {}
+
+    # -- steps ----------------------------------------------------------------
+    def open_chat(self, contact: str) -> tuple[bool, str]:
+        wait = _seconds(settings().get("chat_wait"), 6.0)
+        with self._lock:
+            try:
+                self._ready()
+                before = self._header().get("title") or ""
+                ok, why = self._type_into(_SEARCH, contact, "chat search box")
+                if not ok:
+                    return False, why
+                time.sleep(1.8)             # the result list filters as you type
+
+                def opened():
+                    title = self._header().get("title") or ""
+                    # A chat that was open before keeps its header until the
+                    # new one replaces it: an unchanged title only counts when
+                    # it already is the contact asked for.
+                    return title if title and (title != before or same_contact(contact, title)) else ""
+
+                self._do("key", "Enter")
+                title = self._until(opened, wait)
+                if not title:
+                    self._js(_ENTER_JS)
+                    title = self._until(opened, wait / 2)
+                if not title:
+                    return False, "the conversation header could not be read"
+                # Let the chat finish opening (it can re-render once), then
+                # read the header again: that is the chat the next step uses.
+                time.sleep(0.8)
+                title = self._header().get("title") or ""
+                if not title:
+                    return False, "the conversation header could not be read"
+                return True, title
+            except Exception as e:
+                return False, str(e)
+
+    def call(self, kind: str = "voice") -> tuple[bool, str]:
+        with self._lock:
+            try:
+                self._ready()
+                names = self._header().get("buttons") or []
+                ctl = classify_controls(names, need=kind).get(kind)
+                if not ctl:
+                    return False, (f"no {kind}-call button in this chat (the header offers: "
+                                   f"{', '.join(names) or 'nothing'})")
+                if not self._js(_PRESS_JS, {"name": ctl, "header": True}):
+                    return False, f"the button '{ctl}' could not be pressed"
+                return True, ctl
+            except Exception as e:
+                return False, str(e)
+
+    def hangup(self) -> tuple[bool, str]:
+        with self._lock:
+            try:
+                self._ready()
+                names = self._js(_CALL_BUTTONS_JS) or []
+                ctl = classify_controls(names, need="end").get("end")
+                if not ctl:
+                    return False, "no hang-up button is showing"
+                if not self._js(_PRESS_JS, {"name": ctl, "header": False}):
+                    return False, "the button could not be pressed"
+                return True, ctl
+            except Exception as e:
+                return False, str(e)
+
+    def send_text(self, message: str) -> tuple[bool, str]:
+        with self._lock:
+            try:
+                self._ready()
+                ok, why = self._type_into(_COMPOSER, message, "message box")
+                if not ok:
+                    return False, why
+                mark = f"{time.time_ns()}"
+                if not self._js(_MARK_JS, {"sels": list(_COMPOSER), "mark": mark}):
+                    return False, "the message box disappeared before sending"
+                mine = [f'[data-jarvis-send="{mark}"]']
+                time.sleep(0.3)
+
+                def box_text():
+                    return self._js(_TEXT_JS, mine)       # None: the box was replaced
+
+                def emptied():
+                    text = box_text()
+                    return text is not None and not text.strip()
+
+                def gone():
+                    return box_text() is None
+
+                self._do("key", "Enter")
+                if self._until(emptied, 2.5):
+                    return True, ""
+                # Only while the very message is still waiting in the very box —
+                # otherwise a second press could send something twice.
+                for fallback in (_ENTER_JS, _SEND_BUTTON_JS):
+                    if gone() or fold(box_text()) != fold(message):
+                        break
+                    self._js(fallback)
+                    if self._until(emptied, 2.5):
+                        return True, ""
+                if gone():
+                    return False, ("the chat reloaded while sending, so it cannot be confirmed — "
+                                   "look in WhatsApp before sending it again")
+                return False, "Enter did not send it — the message is still in the box"
+            except Exception as e:
+                return False, str(e)
+
+    def diagnose(self) -> tuple[bool, str]:
+        with self._lock:
+            try:
+                self._ready(wait_s=20)
+            except Exception as e:
+                return False, str(e).replace(" and ask again", ", then press CHECK again")
+            info = self._header()
+            if not info:
+                return True, "linked to your WhatsApp account; open any chat to check the call buttons"
+            found = classify_controls(info.get("buttons") or [], need="voice")
+            if not (found.get("voice") or found.get("video")):
+                return True, ("linked, but no call buttons found in the open chat (WhatsApp Web offers "
+                              "calls only in some browsers and regions)")
+            return True, "linked, and the call buttons were found"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1217,13 +1490,37 @@ _cache: dict = {}
 _cache_lock = threading.Lock()
 
 
-def _web() -> tuple[Transport | None, str]:
+def _chrome() -> tuple[Transport | None, str]:
     if not installed("playwright"):
         return None, "playwright is not installed — run: pip install playwright"
     with _cache_lock:
         if "web" not in _cache:
             _cache["web"] = WebTransport()
         return _cache["web"], ""
+
+
+def _embedded() -> tuple[Transport | None, str]:
+    try:
+        from core import whatsapp_embed
+        host = whatsapp_embed.host()
+    except Exception:
+        host = None
+    if host is None:
+        return None, ("WhatsApp Web cannot run inside the app here (no JARVIS window, or Qt "
+                      "WebEngine is missing — pip install PyQt6-WebEngine)")
+    with _cache_lock:
+        if "embedded" not in _cache:
+            _cache["embedded"] = EmbeddedWebTransport(host)
+        return _cache["embedded"], ""
+
+
+def _web() -> tuple[Transport | None, str]:
+    """WhatsApp Web: inside the JARVIS window when it can, else in Chrome/Edge."""
+    t, why = _embedded()
+    if t is not None:
+        return t, ""
+    c, why2 = _chrome()
+    return (c, "") if c is not None else (None, f"{why}; {why2}")
 
 
 def _mac_desktop() -> tuple[Transport | None, str]:
@@ -1266,6 +1563,8 @@ def get() -> tuple[Transport | None, str]:
     choice = str(settings().get("transport") or "auto").lower()
     if choice == "web":
         return _web()
+    if choice == "chrome":
+        return _chrome()
     if choice == "desktop":
         return _desktop()
     if _OS in ("Windows", "Darwin"):

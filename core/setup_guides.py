@@ -101,20 +101,22 @@ GUIDES: dict[str, dict] = {
         "aliases": ["whatsapp", "whats app", "wa", "call", "video call", "message"],
         "time": "about 1 minute",
         "need": "WhatsApp on your phone. On Windows and Mac the WhatsApp desktop app (signed in) "
-                "is used when it is installed; otherwise, and on Linux, Google Chrome or "
-                "Microsoft Edge for WhatsApp Web.",
+                "is used when it is installed; otherwise, and on Linux, WhatsApp Web inside the "
+                "JARVIS window (or in Google Chrome / Microsoft Edge when the embedded browser, "
+                "PyQt6-WebEngine, is not installed).",
         "steps": [
             "Leave HOW TO REACH WHATSAPP on 'auto' (the WhatsApp desktop app on Windows and Mac "
             "if installed, otherwise WhatsApp Web). With the desktop app, sign in to it, open any "
             "chat and press CHECK in ⚙ → WHATSAPP CALLS (or just say \"check WhatsApp\") — on a "
             "Mac, allow Accessibility for the app JARVIS runs from (System Settings → Privacy & "
             "Security → Accessibility) if asked; that is all, nothing to scan.",
-            "WhatsApp Web only: press CHECK (or say \"check WhatsApp\"). A browser window opens on "
-            "WhatsApp Web with a QR code.",
+            "WhatsApp Web only: press CHECK (or say \"check WhatsApp\"). The WHATSAPP panel opens "
+            "under the head with a QR code (CONTROLS → WHATSAPP shows or hides it any time).",
             "On your phone open WhatsApp → Settings (iPhone) or the ⋮ menu (Android) → Linked "
             "devices → Link a device, and scan the QR code.",
-            "Wait until your chats appear in that window. You can minimise it, but keep it open — "
-            "the assistant uses it. The link is remembered in config/whatsapp_web on this computer only.",
+            "Wait until your chats appear in the panel. You can hide it with its ✕ — WhatsApp keeps "
+            "running inside JARVIS. The link is remembered in config/whatsapp_web_embedded on this "
+            "computer only.",
         ],
         "done": "Say \"send a WhatsApp to Anna saying I'm on my way\" or \"call Anna on WhatsApp\". "
                 "It always asks you to confirm before it sends or dials.",

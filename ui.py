@@ -100,11 +100,21 @@ def _apply_ui_scale() -> None:
 class JarvisUI:
     def __init__(self, face_path: str, size=None):
         _apply_ui_scale()
+        if QApplication.instance() is None:
+            # Qt WebEngine (the WhatsApp panel, gui/whatsapp_web.py) is imported
+            # only when first used, and that is allowed only if this is set
+            # before the application exists. Harmless without WebEngine.
+            from PyQt6.QtCore import QCoreApplication, Qt
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
         self._win.show()
+        from gui import whatsapp_web as _wa_web
+        if _wa_web.available():
+            from core import whatsapp_embed
+            whatsapp_embed.register(self)
 
     @property
     def muted(self) -> bool:
@@ -319,6 +329,22 @@ class JarvisUI:
     def hide_quiz(self) -> None:
         """Thread-safe: clear any quiz currently on the board."""
         self._win._quiz_hide_sig.emit()
+
+    def whatsapp_web(self, op: str, *args, timeout: float = 15.0):
+        """Thread-safe: run one step in the WhatsApp Web panel inside the window
+        and return its answer (see gui/whatsapp_web.py for the steps). Waits for
+        the Qt thread, so it must be called from a worker thread. Raises
+        RuntimeError when the step fails or takes longer than `timeout`."""
+        from PyQt6.QtCore import QThread
+        if QThread.currentThread() == self._app.thread():
+            raise RuntimeError("whatsapp_web() waits for the Qt thread — call it from a worker thread")
+        box, done = {}, threading.Event()
+        self._win._wa_sig.emit({"op": op, "args": args, "box": box, "done": done})
+        if not done.wait(timeout):
+            raise RuntimeError(f"the WhatsApp panel did not answer within {timeout:.0f} s")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     def show_review(self, title: str, summary: str, findings, unclear=None) -> None:
         """Thread-safe: lay a document review into the panel below the HUD.

@@ -90,6 +90,7 @@ from gui.providers_panel import (
 from PyQt6.QtWidgets import QGridLayout
 
 from gui.style import DISPLAY_CSS, btn_css, hud_font, px_font, scroll_css
+from gui.whatsapp_web import WhatsAppWeb
 from gui.widgets import (ArcLogo, CommandFrame, DataRow, HeaderBar, HoloPanel, IconButton,
                          PanelText, RingGauge, RoutineRow, Sparkline, StateChip, StatusStrip,
                          TaskRow)
@@ -127,6 +128,9 @@ class MainWindow(QMainWindow):
     _subtitle_sig      = pyqtSignal(str, str)
     _chips_sig         = pyqtSignal(object)   # "Things to say" suggestions (list[str])
     _subtitle_hide_sig = pyqtSignal()
+    # WhatsApp Web in the panel under the head: one request from a worker
+    # thread, answered through the dict it carries (gui/whatsapp_web.py).
+    _wa_sig            = pyqtSignal(object)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -194,6 +198,7 @@ class MainWindow(QMainWindow):
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._content_panel = self._build_content_panel()
         self._quiz_panel = self._build_quiz_panel()
+        self._wa_panel = self._build_whatsapp_panel()
 
         # Live camera container — replaces HUD when camera stream is active
         _cam_cont = QWidget()
@@ -388,6 +393,7 @@ class MainWindow(QMainWindow):
         self._center_split.addWidget(_hud_wrap)
         self._center_split.addWidget(self._content_panel)
         self._center_split.addWidget(self._quiz_panel)
+        self._center_split.addWidget(self._wa_panel)
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
@@ -444,6 +450,7 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._wa_sig.connect(self._wa_web.handle)
         self._subtitle_sig.connect(self._show_subtitle)
         self._chips_sig.connect(self._on_chips)
         # Chips are rebuilt now and then (time of day, new routines, things
@@ -1794,6 +1801,10 @@ class MainWindow(QMainWindow):
         self._hud_btn.clicked.connect(self._toggle_hud_style)
         self._refresh_hud_btn()
 
+        wa_btn = _row(QPushButton("💬  WHATSAPP"), self._BTN_DIM)
+        wa_btn.setToolTip("Show or hide WhatsApp Web inside JARVIS")
+        wa_btn.clicked.connect(self._toggle_whatsapp)
+
         w.adjustSize()
         return w
 
@@ -2215,6 +2226,29 @@ class MainWindow(QMainWindow):
         self.hud.glance(0.0, -0.85, hold=1.3)
         self._reveal_below_hud(self._quiz_panel, 250)
         self._quiz_render()
+
+    # ── WhatsApp Web, inside the window ──────────────────────────────────────
+    def _build_whatsapp_panel(self) -> QWidget:
+        w = HoloPanel("WHATSAPP", "")
+        w.setObjectName("WhatsAppPanel")
+        w.hide()
+        hide_btn = IconButton("close", 22)
+        hide_btn.setToolTip("Hide — WhatsApp stays linked and keeps running")
+        hide_btn.clicked.connect(w.hide)
+        w.add_header_widget(hide_btn)
+        self._wa_web = WhatsAppWeb(lambda: self._reveal_below_hud(w, 460))
+        self._wa_web.setMinimumHeight(220)
+        w.body.addWidget(self._wa_web, stretch=1)
+        return w
+
+    def _toggle_whatsapp(self):
+        split = self._center_split
+        idx = split.indexOf(self._wa_panel)
+        if self._wa_panel.isVisible() and idx >= 0 and split.sizes()[idx] >= 60:
+            self._wa_panel.hide()
+            return
+        self._wa_web.ensure()        # when it cannot start, the panel says why
+        self._reveal_below_hud(self._wa_panel, 460)
 
     def _hide_quiz(self):
         self._quiz = None

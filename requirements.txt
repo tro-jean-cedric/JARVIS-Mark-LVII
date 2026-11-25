@@ -24,6 +24,11 @@ requests>=2.31,<3
 certifi>=2024.2.2            # HTTPS roots beside the system's (core/tls.py)
 beautifulsoup4>=4.12,<5
 playwright>=1.40,<2
+# WhatsApp Web inside the JARVIS window (gui/whatsapp_web.py). Without it
+# WhatsApp Web falls back to a separate Chrome window through playwright.
+# Its own version numbers follow Chromium's (6.140 = Chromium 140); pip picks
+# the build that matches the installed PyQt6.
+PyQt6-WebEngine>=6.6,<7
 
 # ── Video on the HUD ──────────────────────────────────────────────────────────
 # Qt plays local files and direct media URLs on its own — QtMultimedia comes

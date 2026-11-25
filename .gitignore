@@ -16,6 +16,7 @@ config/certs/
 # a LINKED WhatsApp session — committing it hands somebody your WhatsApp
 # account, not just a key
 config/whatsapp_web/
+config/whatsapp_web_embedded/
 # Google OAuth tokens (Gmail / Calendar plugins)
 **/token*.json
 # Google OAuth client secrets
