@@ -2,7 +2,7 @@
 plugins/_hands.py — one hand seen through the webcam, and what it is doing.
 
 Helper module (leading underscore: the plugin loader skips it). Used by
-gesture_control and holo_desk.
+gesture_control. (The Holo Desk uses plugins/_hands_onnx.py: two hands, 21 points, no MediaPipe needed.)
 
 Trackers (best first), both returning a HandObs per frame:
   * MediaPipe Hands (optional: pip install mediapipe) — 21 landmarks, so every

@@ -39,6 +39,12 @@ MODELS = {
         (f"{_ZOO}/face_detection_yunet/face_detection_yunet_2023mar.onnx", 100_000),
     "face_recognition_sface_2021dec.onnx":
         (f"{_ZOO}/face_recognition_sface/face_recognition_sface_2021dec.onnx", 10_000_000),
+    # Hands, for the Holo Desk (plugins/_hands_onnx.py). Apache-2.0, MediaPipe.
+    "palm_detection_mediapipe_2023feb.onnx":
+        (f"{_ZOO}/palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx", 3_000_000),
+    "handpose_estimation_mediapipe_2023feb.onnx":
+        (f"{_ZOO}/handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx",
+         3_000_000),
 }
 YUNET = "face_detection_yunet_2023mar.onnx"
 SFACE = "face_recognition_sface_2021dec.onnx"

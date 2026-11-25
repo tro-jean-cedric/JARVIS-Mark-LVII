@@ -65,7 +65,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | pushup_counter | Count push-ups live via webcam, session history | ✅ | MediaPipe pose elbow angle if installed, else face-dip tracking with hysteresis |
 | face_lock | Assistant only works for the owner's face (enroll/lock/unlock) | ✅ | SFace enroll/lock/unlock(PIN)/forget; main.py mic callback is gated while locked; lock-at-start via `on_startup` |
 | gesture_control | Webcam hand gestures: stop talking, tracks, volume, yes/no | ✅ | Full set with `pip install mediapipe`; without it only swipe + open palm |
-| holo_desk | Full-screen camera view with hand-controlled floating panels | 🟡 | Camera picture + Pillow-drawn panels on the HUD, swipe/palm control. Shown in the large HUD area (`player.show_hud_frame`). No full-screen window or fling/clap/panel-ring gestures; pinch-drag needs mediapipe |
+| holo_desk | Full-screen camera view with hand-controlled floating panels | ✅ | Own full-screen window (`gui/holo_desk.py`), camera or overlay mode. Hands with OpenCV alone: MediaPipe palm + 21-point hand models from the OpenCV zoo on cv2.dnn (`plugins/_hands_onnx.py`), two hands. Panels: clock, system, weather, news, notes (Obsidian), coming up, 3D model (.obj wireframe), image, video, text, guide. Gestures: pinch-carry by title bar, throw / fling off screen to close, list scroll, two-hand resize, pull nearer to grow, clap to clear + spread to restore, pinch-hold panel ring, dock pull-out, quick-pinch press, point = "this", hand turn rotates the model; mouse, wheel and Esc too. Snap to edges, sounds, saved desks. Not ported: closing when the computer locks; the 3D model is a wireframe, not shaded |
 | home_assistant | Tuya / Smart Life light: on/off, colour, brightness, scenes | ✅ | Local (tinytuya) **or** your own Tuya cloud project; ~20 moods. Untested on a real bulb |
 | printer_control | 3D printer over LAN (status, pause, temps, fans, light) | ✅ | Bambu (MQTT/TLS), OctoPrint, Moonraker; stop behind confirm; progress announcements. Camera = snapshot, not live stream. Untested on a real printer |
 | shop_assistant | Find real prices/stock/delivery across shops, add to cart (never buy) | 🟡 | Search → page extraction (JSON-LD/meta/text) → model check; baskets; Playwright add-to-cart that blocks checkout/pay. Missing: variant choice, comparison-site follow-through, price tracking |
@@ -127,7 +127,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 
 ## Totals (2026-11-24)
 
-- Plugins: 34 added — 24 ✅, 10 🟡 (disk_map, build_guide, video_summarizer, holo_desk, whatsapp_call, cloud_agent, shop_assistant, connected_apps, planet_watch, live_subtitles); 4 already in JARVIS.
+- Plugins: 34 added — 25 ✅, 9 🟡 (disk_map, build_guide, video_summarizer, whatsapp_call, cloud_agent, shop_assistant, connected_apps, planet_watch, live_subtitles); 4 already in JARVIS.
 - Actions: 6 added — 5 ✅, 1 🟡 (window_control) — plus the new `remote_mode` action.
 - App-level: 8 ✅, 2 🟡, 1 ➖ (Moments), 3 ⛔ (Torvis's own commercial services / feedback channel / 10-language UI).
 - Nothing in JARVIS is gated by a licence, plan, allowance or trial.

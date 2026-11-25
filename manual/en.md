@@ -164,6 +164,8 @@ ask "how do I set up Telegram?" — the setup_guide tool shows the same steps on
 screen. There are also guides for the Gemini API key / "out of quota" and for
 Remote Mode / Wake-on-LAN.
 
+Holo Desk: say "open the holo desk". Your camera picture fills the screen and glass panels float in it - clock, system, weather, news, notes, what is coming up, a 3D model, pictures, videos, any text ("put the recipe on the holo desk"). Pinch a panel's title bar to carry it, let go while moving to throw it, throw it off the screen to close it. Both hands on one panel resize it; pull a held panel towards you to make it bigger. Clap both open hands to put everything away, pull them apart to bring it back. Pinch and hold on empty space for a ring of new panels, or pinch a button in the dock at the bottom. Point at a panel and say "read this" or "close this". "Put the desk over my screen" floats the panels over your own programs. The mouse works too (drag, wheel, Esc). The first time, it downloads two small hand models (~8 MB).
+
 Your own plugins: in the Plugin Manager press "+ ADD PLUGIN", pick the .py file,
 read the warning and APPROVE. It is listed as "added by you" and starts OFF.
 A plugin runs with your own permissions and can do anything you can — only add

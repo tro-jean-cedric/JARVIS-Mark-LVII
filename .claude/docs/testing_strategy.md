@@ -10,6 +10,7 @@ entry points plus running the app.
 |---|---|---|
 | `python -m providers._tests` | providers layer end to end against local mocks; main.py's real call shapes; that `providers/` costs nothing when unused | full `requirements.txt` (imports `google.genai`, PyQt6); no network or key |
 | `python -m providers.schema` | tool declarations from main.py and actions convert cleanly; prints the tool budget for small models | stdlib only (verified) |
+| `python -m plugins._holo_desk_tests` | Holo Desk logic: panels, throw physics, every gesture (carry, fling, scroll, two-hand resize, pull nearer, clap/spread, ring, dock, point, rotate), mouse, hand filter, saved desks — synthetic hands at 30 fps | stdlib only; no camera, window or network |
 | `python -m core.screenview` / `python -m core.screenact` | screen-reading / input capabilities on this machine (`screenact` moves the mouse) | GUI session |
 
 `providers/_tests.py` is a hand-rolled harness: `check(name, cond, detail)`

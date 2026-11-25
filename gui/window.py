@@ -109,6 +109,8 @@ class MainWindow(QMainWindow):
     # picture and pushes the result here). Same surface as the live camera.
     _hud_frame_sig  = pyqtSignal(bytes)
     _hud_frame_stop_sig = pyqtSignal()
+    # The full-screen Holo Desk (gui/holo_desk.py): (command, arguments).
+    _holo_sig       = pyqtSignal(str, object)
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _image_open_sig  = pyqtSignal(str, str)   # still picture on the HUD: path, title
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
@@ -438,6 +440,8 @@ class MainWindow(QMainWindow):
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._hud_frame_sig.connect(self._on_hud_frame)
         self._hud_frame_stop_sig.connect(self._on_hud_frame_stop)
+        self._holo_sig.connect(self._on_holo)
+        self._holo = None
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
         self._image_open_sig.connect(self._on_image_open)
@@ -531,6 +535,39 @@ class MainWindow(QMainWindow):
             return
         if self._hud_cam_stack.currentIndex() == 1:
             self._on_cam_stream(False)
+
+    # The Holo Desk: its own full-screen window, made and driven here only.
+    def _on_holo(self, cmd: str, kw) -> None:
+        kw = dict(kw or {})
+        try:
+            if cmd == "open":
+                if self._holo is None:
+                    from plugins import _holo_desk_core as holo_core
+                    from .holo_desk import HoloDeskWindow
+                    self._holo = HoloDeskWindow(
+                        holo_core.shared(), mode=kw.get("mode") or "camera",
+                        on_close=self._holo_closed,
+                        log=lambda s: self._log.append_log(f"SYS: {s}"))
+                    self._holo.open_on(self.screen())
+                else:
+                    if kw.get("mode"):
+                        self._holo.set_mode(kw["mode"])
+                    self._holo.raise_()
+                    self._holo.activateWindow()
+            elif cmd == "mode" and self._holo is not None:
+                self._holo.set_mode(kw.get("mode") or "camera")
+            elif cmd == "close":
+                self._holo_closed()
+        except Exception as e:
+            from plugins import _holo_desk_core as holo_core
+            holo_core.STATE.update(open=False, camera=f"the desk could not be opened: {e}")
+            self._log.append_log(f"SYS: Holo Desk failed: {e}")
+            self._holo = None
+
+    def _holo_closed(self, already_closed: bool = False) -> None:
+        w, self._holo = self._holo, None
+        if w is not None and not already_closed:
+            w.shutdown()
 
     def start_camera_stream(self) -> None:
         self._cam_stop.clear()

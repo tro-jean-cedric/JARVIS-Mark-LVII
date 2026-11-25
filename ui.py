@@ -459,6 +459,12 @@ class JarvisUI:
         """Thread-safe: give the large HUD area back to the avatar."""
         self._win._hud_frame_stop_sig.emit()
 
+    def holo_desk(self, cmd: str, **kw) -> None:
+        """Thread-safe: drive the full-screen Holo Desk (gui/holo_desk.py).
+        cmd: "open" (mode="camera" | "overlay"), "mode" (mode=...), "close".
+        Its state is read back from plugins._holo_desk_core.STATE."""
+        self._win._holo_sig.emit(str(cmd or ""), dict(kw))
+
     @property
     def assistant_name(self) -> str:
         return self._win._assistant_name
