@@ -71,7 +71,7 @@ def frame(mode: str, t: float, hands: list, filt) -> None:
             d = {"slot": name}
             if f is not None:
                 d.update(r=_r(f.r), ri=_r(f.r_img), rw=_r(f.r_world) if f.r_world is not None else None,
-                         rm=_r(f.r_mid), reach=_r(f.index_reach), tip=bool(f.tip_contact),
+                         rm=_r(f.r_mid), reach=_r(f.index_reach), tip=bool(f.tip_contact), tq=_r(getattr(f, "tip_q", 0), 2),
                          fing="".join(x[0] for x in f.fingers), spread=_r(f.spread_deg, 0),
                          conf=_r(f.conf, 2), size=_r(f.size))
             if st is not None:

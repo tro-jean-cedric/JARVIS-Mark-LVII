@@ -253,10 +253,10 @@ def test_clutch():
     s.move(0.1 * s.bw, 0.05 * s.bh, 8)
     before = s.eng._cursor
     s.clear()
-    s.hold(4, pose="open")
-    s.move(0.3 * s.bw, 0.2 * s.bh, 10, pose="open")
-    s.hold(3, pose="open")
-    check("clutch: an open hand sends no moves", "move" not in s.kinds(), s.acts)
+    s.hold(4, pose="fist")
+    s.move(0.3 * s.bw, 0.2 * s.bh, 10, pose="fist")
+    s.hold(3, pose="fist")
+    check("clutch: a fist sends no moves", "move" not in s.kinds(), s.acts)
     check("clutch: the cursor stays put", near(s.eng._cursor, before, 1e-9))
     s.clear()
     s.hold(3, pose="relaxed")
@@ -265,6 +265,26 @@ def test_clutch():
     s.move(0.1 * s.bw, 0.0, 6)
     check("clutch: afterwards the cursor moves relative to the new hand position",
           near(s.eng._cursor, (before[0] + 0.1, before[1]), 0.003), s.eng._cursor)
+
+
+def test_open_hand_moves():
+    # Live trace (Nov 2026): a real resting hand flickers between "open" and
+    # "relaxed". Both must simply move the cursor - no freeze, no void.
+    s = Sim()
+    s.start()
+    s.move(0.05 * s.bw, 0.0, 4)
+    s.clear()
+    before = s.eng._cursor
+    for i in range(12):
+        s.move(0.01 * s.bw, 0.0, 1, pose="open" if i % 3 else "relaxed")
+    check("open hand: moves the cursor like any other pose",
+          s.eng._cursor[0] > before[0] + 0.08, (before, s.eng._cursor))
+    s.clear()
+    s.press()
+    s.hold(1, down=True, pinch="pressed", pose="pinch")
+    s.release()
+    check("open hand: a pinch straight out of an open hand clicks",
+          ("click", "left", 1) in s.acts, (s.acts, s.events))
 
 
 # ── Clicks ───────────────────────────────────────────────────────────────────
@@ -323,11 +343,11 @@ def test_void_after_reacquire_and_clutch():
     s.hold(1, down=True, pinch="pressed", pose="pinch")
     s.release()
     check("void: no click within 0.3 s of the hand coming back", "click" not in s.kinds(), s.acts)
-    check("void: a 'blocked' event says why", ("blocked", "moving") in s.events, s.events)
+    check("void: a 'blocked' event says why", ("blocked", "jump") in s.events, s.events)
 
     s = Sim()
     s.start()
-    s.hold(6, pose="open")
+    s.hold(6, pose="fist")
     s.hold(2, pose="relaxed")
     s.clear()
     s.press()
@@ -349,7 +369,7 @@ def test_void_fast():
     s.release()
     check("void: a press while the hand moves fast does not click", "click" not in s.kinds(),
           s.acts)
-    check("void: fast press reported", ("blocked", "moving") in s.events)
+    check("void: fast press reported", ("blocked", "fast") in s.events, s.events)
 
 
 def test_void_young_and_pose_change():
@@ -362,11 +382,11 @@ def test_void_young_and_pose_change():
     check("void: a hand younger than 6 frames cannot click", "click" not in s.kinds(), s.acts)
     s = Sim()
     s.start()
-    s.hold(1, pose="point")
+    s.hold(1, pose="v")
     s.clear()
     s.press()
     s.release()
-    check("void: a press within 0.1 s of a pose change does not click",
+    check("void: a press within 0.1 s of a mode change (scroll -> move) does not click",
           "click" not in s.kinds(), s.acts)
 
 
@@ -578,10 +598,10 @@ def test_inertia():
 def test_swipes_fake():
     s = Sim(fake_detectors=True)
     s.start()
-    s.hold(4, pose="open")
+    s.hold(4, pose="fist")
     s.clear()
     s.eng._swipe.next = "left"
-    s.hold(1, pose="open")
+    s.hold(1, pose="fist")
     check("swipe wiring: hand left -> Space to the right", ("space", "right") in s.acts, s.acts)
     check("swipe wiring: event with label", any(e[0] == "swipe" and e[1] == "left"
                                                  for e in s.events), s.events)
@@ -589,18 +609,18 @@ def test_swipes_fake():
     for d, want in (("right", ("space", "left")), ("up", ("overview",))):
         s.clear()
         s.eng._swipe.next = d
-        s.hold(1, pose="open")
+        s.hold(1, pose="fist")
         check(f"swipe wiring: {d}", want in s.acts, s.acts)
     s.clear()
     s.eng._swipe.next = "down"
-    s.hold(1, pose="open")
+    s.hold(1, pose="fist")
     want = ("app_windows",) if sys.platform == "darwin" else ("show_desktop",)
     check("swipe wiring: down -> app windows (mac) / show desktop", want in s.acts, s.acts)
     s = Sim(AirSettings(precision=False, space_swipes=False), fake_detectors=True)
     s.start()
     s.eng._swipe.next = "left"
     s.clear()
-    s.hold(1, pose="open")
+    s.hold(1, pose="fist")
     check("swipe wiring: space_swipes off sends nothing", s.acts == [], s.acts)
 
 
@@ -612,35 +632,48 @@ def test_swipe_real():
         return
     s = Sim()
     s.start()
-    s.hold(8, pose="open")
+    s.hold(8, pose="fist")
     s.clear()
-    s.move(-0.30, 0.0, 6, pose="open")          # 0.3 of the frame in 0.2 s
-    s.hold(4, pose="open")
-    check("swipe: open hand left -> ('space', 'right') once",
+    s.move(-0.30, 0.0, 6, pose="fist")          # 0.3 of the frame in 0.2 s
+    s.hold(4, pose="fist")
+    check("swipe: fist flick left -> ('space', 'right') once",
           s.acts.count(("space", "right")) == 1, s.acts)
     s.clear()
-    s.move(0.30, 0.0, 6, pose="open")           # the hand coming back
-    s.hold(4, pose="open")
+    s.move(0.30, 0.0, 6, pose="fist")           # the hand coming back
+    s.hold(4, pose="fist")
     check("swipe: the return stroke is ignored", not any(a[0] == "space" for a in s.acts),
           s.acts)
-    # a clutch reposition: smooth (min-jerk) open-hand strokes that start and
+    # a slow fist reposition: smooth (min-jerk) fist strokes that start and
     # end at rest, as when lifting a mouse to recentre it
     for dist, dur in ((0.30, 0.45), (0.25, 0.30), (0.23, 0.25), (0.40, 0.45)):
         s = Sim()
         s.start()
-        s.hold(8, pose="open")
+        s.hold(8, pose="fist")
         s.clear()
         n = int(round(dur * FPS))
         prev = 0.0
         for i in range(1, n + 1):
             tau = i / n
             p = dist * (10 * tau ** 3 - 15 * tau ** 4 + 6 * tau ** 5)
-            s.frame(x=s.h.x - (p - prev), vx=-(p - prev) / DT, vy=0.0, pose="open")
+            s.frame(x=s.h.x - (p - prev), vx=-(p - prev) / DT, vy=0.0, pose="fist")
             prev = p
-        s.hold(10, pose="open")
-        check(f"swipe: a {dist} / {dur} s clutch reposition does not change desktop",
+        s.hold(10, pose="fist")
+        check(f"swipe: a {dist} / {dur} s slow fist reposition does not change desktop",
               not any(a[0] in ("space", "overview", "app_windows", "show_desktop")
                       for a in s.acts), s.acts)
+
+
+def test_open_hand_fast_move_no_swipe():
+    # A fast open-hand cursor move must never switch desktops any more.
+    s = Sim()
+    s.start()
+    s.hold(8, pose="open")
+    s.clear()
+    s.move(-0.30, 0.0, 6, pose="open")
+    s.hold(4, pose="open")
+    check("swipe: a fast OPEN-hand move only moves the cursor",
+          not any(a[0] in ("space", "overview", "app_windows", "show_desktop") for a in s.acts),
+          s.acts)
 
 
 def test_crush():
@@ -651,47 +684,17 @@ def test_crush():
     s.hold(6, pose="fist")
     check("crush wiring: open then fist -> close_window", ("close_window",) in s.acts, s.acts)
     check("crush wiring: event", ("crush",) in s.events)
-    try:
-        from plugins._gesture_core import CrushDetector  # noqa: F401
-    except Exception as e:
-        skip("crush (real detector)", f"plugins._gesture_core not importable: {e}")
-        return
+    # Real detectors: the crush is OFF in Air Control (the fist is the clutch,
+    # so "open palm then fist" is a normal grab). Close window is in the menu.
     s = Sim()
     s.start()
     s.clear()
     s.hold(int(0.75 * FPS), pose="open")
     s.hold(int(1.0 * FPS), pose="fist")
-    check("crush: open palm still 0.6 s, then a fist held 0.8 s -> close_window",
-          s.acts.count(("close_window",)) == 1, s.acts)
-    s = Sim()
-    s.start()
-    s.clear()
-    s.hold(int(0.45 * FPS), pose="open")
-    s.hold(int(1.0 * FPS), pose="fist")
-    check("crush: a palm held only 0.45 s does not arm", ("close_window",) not in s.acts, s.acts)
-    s = Sim()
-    s.start()
-    s.clear()
-    s.hold(int(0.75 * FPS), pose="open")
-    s.hold(int(0.5 * FPS), pose="fist")
-    s.hold(5, pose="open")
-    check("crush: opening before 0.8 s cancels", ("close_window",) not in s.acts, s.acts)
-    # the clutch: open hand, reposition, stop, then curl the hand to rest it
-    s = Sim()
-    s.start()
-    s.clear()
-    s.hold(4, pose="open")
-    s.move(0.15, 0.05, 10, pose="open")
-    s.hold(int(1.0 * FPS), pose="open")
-    s.hold(int(1.2 * FPS), pose="fist")
-    check("crush: a clutch reposition, then a resting fist, closes nothing",
+    check("crush: off in Air Control - open palm then fist closes nothing",
           ("close_window",) not in s.acts, s.acts)
-    # after leaving the open pose, a fresh palm in place arms again
-    s.hold(5, pose="relaxed")
-    s.hold(int(0.75 * FPS), pose="open")
-    s.hold(int(1.0 * FPS), pose="fist")
-    check("crush: ...a fresh palm afterwards still works",
-          s.acts.count(("close_window",)) == 1, s.acts)
+    check("crush: 'close_window' is offered in the pinch-hold menu",
+          "close_window" in ac.MENU_ITEMS, ac.MENU_ITEMS)
 
 
 def test_crush_suspended_when_typing():

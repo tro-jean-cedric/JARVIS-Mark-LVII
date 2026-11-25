@@ -599,13 +599,37 @@ def test_camera_stamp():
         _camera._frame, _camera._frame_at, _camera._frame_mono = saved
 
 
+def test_curled_index_pinch():
+    """Live trace (Nov 2026): a pinch made with a CURLED index (tip folded back
+    near its own joints) was refused as 'thumb not at the tip' while the gap
+    was 0.21-0.23 palm lengths. A tight pinch must count; the thumb lying
+    along the finger's side, away from the tip, must still not."""
+    from plugins import _gesture_synth as gs
+    from plugins._gesture_core import features
+    curled = (60.0, 85.0, 60.0)
+    fingers = [gs._finger(0, curled, 0.2)] + [gs._finger(k, gs.FIST, 0.2) for k in (1, 2)] \
+        + [gs._finger(3, gs.OPEN, 0.2)]
+    tip = gs._add(fingers[0][3], (0.2 * gs.PALM, 0.0, 0.0))
+    h = gs._build(fingers, tip, x=0.5, y=0.6, size=0.18, roll=0.0, yaw=0.0, aspect=16 / 9,
+                  world=True, conf=0.99, side="right")
+    f = features(h)
+    check("curled-index pinch: counts as tip contact", f.tip_contact, (f.r, f.tip_q))
+    side = gs._add(fingers[0][1], (0.12 * gs.PALM, 0.0, 0.0))   # beside the PIP joint
+    straight = [gs._finger(0, gs.SOFT, 0.2)] + fingers[1:]
+    h2 = gs._build(straight, side, x=0.5, y=0.6, size=0.18, roll=0.0, yaw=0.0,
+                   aspect=16 / 9, world=True, conf=0.99, side="right")
+    f2 = features(h2)
+    check("thumb along the index side (away from the tip): no tip contact",
+          not f2.tip_contact, (f2.r, f2.tip_q))
+
+
 def main() -> int:
     print("gesture core self-test")
     for fn in (test_aspect_regression, test_false_pinches, test_real_pinch,
                test_pinch_detector_rule, test_click_drift, test_retro_press, test_lock_unlock,
                test_slots, test_lost, test_cache, test_one_euro, test_poses, test_swipes,
                test_crush, test_crush_end_to_end, test_fake_hand, test_hand_stream,
-               test_camera_stamp):
+               test_camera_stamp, test_curled_index_pinch):
         try:
             fn()
         except Exception as e:

@@ -111,6 +111,7 @@ CRUSH_RESET_SPEED = 0.5
 # A swipe must cover its distance at this AVERAGE speed (picture units / s):
 # an open-hand clutch reposition has a flick-like peak but not its average.
 SWIPE_MIN_AVG = 1.5
+CRUSH_IN_AIR = False        # see _new_crush
 MENU_R = 0.11
 MENU_HIT = 0.07
 DICTATE_HOLD = 0.35
@@ -123,12 +124,12 @@ HISTORY_S = 0.5
 MOVE_EPS = 0.0003
 CLAMP = (0.0005, 0.9995)
 
-HINT = "Relaxed hand moves · pinch clicks · two fingers scroll · open hand pauses and swipes"
+HINT = "Any hand moves · pinch clicks · two fingers scroll · fist pauses · fist flick switches desktop"
 OWN_FOCUS = "JARVIS has the keyboard - click into your app first"
 SECURE_NOTE = "\U0001F512 Password field: type this one on your keyboard"
 
 MENU_ITEMS = ("right_click", "keyboard", "back", "forward", "browser", "launcher",
-              "overview", "exit")
+              "overview", "close_window", "exit")
 
 
 def _overview_label() -> str:
@@ -141,7 +142,8 @@ def _menu_labels() -> dict:
     return {"right_click": ("Right click", "▣"), "keyboard": ("Keyboard", "⌨"),
             "back": ("Back", "←"), "forward": ("Forward", "→"),
             "browser": ("Browser", "◎"), "launcher": ("Launcher", "▦"),
-            "overview": (_overview_label(), "⧉"), "exit": ("Exit", "✕")}
+            "overview": (_overview_label(), "⧉"), "close_window": ("Close window", "⊠"),
+            "exit": ("Exit", "✕")}
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────
@@ -444,13 +446,24 @@ class AirEngine:
     def _new_swipe():
         try:
             from plugins._gesture_core import SwipeDetector
-            return SwipeDetector(min_avg=SWIPE_MIN_AVG)
+            # Fist flicks only. Seen live (Nov 2026): a real resting hand has
+            # all four fingers out with 10-25 deg of spread, right on the
+            # open/relaxed line, so open-hand swipes fired on fast cursor
+            # moves. The fist is the clutch (the cursor is frozen), so a fist
+            # flick never drags the pointer with it.
+            return SwipeDetector(min_avg=SWIPE_MIN_AVG, poses=("fist",))
         except Exception as e:
             print(f"[air] swipes off: {e}")
             return None
 
     @staticmethod
     def _new_crush():
+        # Off in Air Control: the fist is now the clutch, and "open palm, then
+        # fist" is exactly how a user grabs to reposition - it would close
+        # windows by accident. "Close window" lives in the pinch-hold menu.
+        # (The Holo Desk keeps the crush to close a card.)
+        if not CRUSH_IN_AIR:
+            return None
         try:
             from plugins._gesture_core import CrushDetector
             return CrushDetector(confirm=CRUSH_CONFIRM, arm_time=CRUSH_ARM, fresh=True)
@@ -706,7 +719,7 @@ class AirEngine:
         self._commanded = deque([self._cursor], maxlen=2)
         self._reanchor(s)
         self._transition_until = t + GUARD
-        self._np_pose = str(_g(s, "pose", ""))
+        self._np_pose = {"fist": "fist", "v": "v"}.get(str(_g(s, "pose", "")), "move")
         self._pose_changed_t = _num(s, "t", t)
         if _g(s, "down", False):
             # A pinch that began before we had the hand is not ours to act on.
@@ -820,8 +833,11 @@ class AirEngine:
         pose = str(_g(s, "pose", "none"))
         self._closeness = _num(s, "closeness")
         self._pinch = str(_g(s, "pinch", "open"))
-        if pose not in ("pinch", "pinch_mid") and pose != self._np_pose:
-            self._np_pose = pose
+        # Only a change of what the hand DOES counts (move / clutch / scroll):
+        # open <-> relaxed <-> point flicker on a real hand and all just move.
+        kind = {"fist": "fist", "v": "v"}.get(pose, "move")
+        if pose not in ("pinch", "pinch_mid") and kind != self._np_pose:
+            self._np_pose = kind
             self._pose_changed_t = st
         down = bool(_g(s, "down", False))
         tp = _num(s, "t_press", 0.0)
@@ -834,7 +850,11 @@ class AirEngine:
 
         swipe = self._swipe_update(x, y, pose, st)
         modal = self._kb is not None or self._dictating
-        pose_mode = {"open": "clutch", "fist": "fist", "v": "v"}.get(pose, "move")
+        # Every hand shape moves the cursor except the fist (the clutch: lift
+        # the mouse) and the V (scroll). An open hand used to be the clutch;
+        # live traces showed real resting hands flicker between open and
+        # relaxed, freezing the cursor at random and voiding the next pinch.
+        pose_mode = {"fist": "clutch", "v": "v"}.get(pose, "move")
         if self._mode == "clutch" and pose_mode != "clutch":
             # Leaving the clutch moves the cursor again: no click for a moment,
             # including a pinch made straight out of the open hand.
@@ -871,7 +891,7 @@ class AirEngine:
         # Leaving a pose mode.
         if mode != self._mode and self._mode == "v":
             self._leave_v()
-        if mode in ("clutch", "fist", "v"):
+        if mode in ("clutch", "v"):
             freeze = True
         if mode != "v":
             self._v_t0 = None
@@ -900,7 +920,7 @@ class AirEngine:
                     self._crush_phase = ("idle", 0.0) if ph == "cancelled" else (ph, pr)
         elif self._crush_phase[0] != "idle" or modal:
             self._crush_reset()
-        if mode == "fist" and self._dictating:
+        if mode == "clutch" and pose == "fist" and self._dictating:
             if self._fist_t0 is None:
                 self._fist_t0 = t
         else:
@@ -949,7 +969,7 @@ class AirEngine:
         why = self._void(s, t, _num(s, "t_press", st), speed)
         if why:
             self._grip = _Grip("void", t, u0, v0, x, y)
-            self._event("blocked", "moving")
+            self._event("blocked", why)
             return self._grip
         hit = self._ui_hit(u0, v0)
         if hit is not None:
@@ -1034,6 +1054,9 @@ class AirEngine:
             self._out(acts, ("launcher",))
         elif item == "overview":
             self._out(acts, ("overview",))
+        elif item == "close_window":
+            self._out(acts, ("close_window",))
+            self._toast_("Close window")
         elif item == "exit":
             acts.extend(self.request_exit("menu"))
 
@@ -1070,7 +1093,7 @@ class AirEngine:
         why = self._void(s, t, st, speed)
         self._mid = _Grip("void" if why else "pending", t, u0, v0, x, y)
         if why:
-            self._event("blocked", "moving")
+            self._event("blocked", why)
         self._cursor = (u0, v0)
 
     def _mid_release(self, m: _Grip, s, t, acts) -> None:
@@ -1722,11 +1745,11 @@ class AirEngine:
             progress = self._crush_phase[1]
         elif self._mode == "v":
             ring = "scroll"
-        elif self._mode == "clutch":
-            ring = "clutch"
-        elif self._mode == "fist" and self._dictating and self._fist_t0 is not None:
+        elif self._mode == "clutch" and self._dictating and self._fist_t0 is not None:
             ring = "crush"
             progress = _clamp((t - self._fist_t0) / FIST_STOP)
+        elif self._mode == "clutch":
+            ring = "clutch"
         elif self._pinch == "armed":
             ring = "armed"
         hand = None

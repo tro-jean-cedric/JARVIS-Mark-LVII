@@ -32,9 +32,9 @@ PLUGIN = {
     "description": (
         "Air Control: whole-computer hand control through the webcam - a virtual mouse over "
         "everything on screen. The user's hand moves the real cursor, a pinch clicks, pinch and "
-        "move drags, thumb on middle finger right-clicks, two fingers scroll, an open hand "
-        "pauses and swipes between desktops, open palm then fist closes the window, and a "
-        "held pinch opens a menu (browser, back, forward, keyboard...). When a text field has "
+        "move drags, thumb on middle finger right-clicks, two fingers scroll, a fist pauses "
+        "the cursor and a fist flick switches desktops, and a held pinch opens a menu "
+        "(browser, back, forward, keyboard, close window...). When a text field has "
         "focus a type bar offers dictation and an air keyboard. Actions: start (turn it on), "
         "stop, status, dictate (`op` start|stop|send|undo: type what the user says into the "
         "focused text field), keyboard (show the air keyboard), help (the gestures). Use "
@@ -74,7 +74,7 @@ PLUGIN_SETTINGS = {
          "type": "toggle", "default": True},
         {"key": "scroll_speed", "label": "Scroll speed", "type": "choice",
          "options": ["0.5", "1", "1.5", "2"], "default": "1"},
-        {"key": "space_swipes", "label": "Swipe an open hand to switch desktops",
+        {"key": "space_swipes", "label": "Flick a fist to switch desktops",
          "type": "toggle", "default": True},
         {"key": "type_bar", "label": "Show the type bar in text fields", "type": "toggle",
          "default": True},
@@ -101,18 +101,16 @@ PERMISSION_WHY = ("macOS has not allowed this app to control the mouse and keybo
                   "JARVIS.")
 
 HELP = (
-    "Air Control gestures - relaxed hand: moves the cursor. Quick pinch (thumb and index): "
-    "click; two quick pinches: double click. Pinch and move: drag. Thumb on the middle "
-    "finger: right click. Pinch held still about a second: a menu (right click, keyboard, "
-    "back, forward, browser, launcher, Mission Control, exit). Two fingers up (V): scroll. "
-    "Flat open hand: pauses the cursor so the hand can be repositioned; swiped left or right "
-    "it switches desktop, up shows all windows, down shows the app's windows or the desktop. "
-    "Open palm made in place and held still (not right after repositioning), then a fist "
-    "held until the ring fills: closes the tab or window; opening the hand cancels. In a "
-    "text field a bar "
-    "offers Dictate and an air keyboard. To stop: both hands open and still for a second, "
-    "Esc, or say 'stop air control'. Explain the essentials in two or three sentences, in "
-    "the user's language."
+    "Air Control gestures - any open or relaxed hand moves the cursor. Quick pinch (thumb "
+    "and index): click; two quick pinches: double click. Pinch and move: drag. Thumb on the "
+    "middle finger: right click. Two fingers up (V): scroll. Fist: pauses the cursor so the "
+    "hand can be repositioned (like lifting a mouse); a quick fist flick left or right "
+    "switches desktop, up shows all windows, down shows the app's windows or the desktop. "
+    "Pinch held still about a second: a menu (right click, keyboard, back, forward, browser, "
+    "launcher, Mission Control, close window, exit). In a text field a bar offers Dictate "
+    "and an air keyboard. To stop: both hands open and still for a second, Esc, or say "
+    "'stop air control'. Explain the essentials in two or three sentences, in the user's "
+    "language."
 )
 
 # Test hooks: modules used instead of core.os_input / core.dictation when set.
@@ -194,9 +192,9 @@ def _start(player) -> str:
                 note="The overlay is up but no hand can be seen until the camera works.")
         return outcome.done(
             "air_control", on=True, cursor="verified",
-            note="Tell the user in one or two sentences, in their language: relaxed hand moves, "
-                 "pinch clicks, two fingers scroll, open hand pauses and swipes desktops; both "
-                 "open hands, Esc or saying stop ends it.")
+            note="Tell the user in one or two sentences, in their language: any hand moves, "
+                 "pinch clicks, two fingers scroll, a fist pauses and a fist flick switches "
+                 "desktops; both open hands, Esc or saying stop ends it.")
     if ok and not input_ok:
         why = core.STATE.get("error") or "the overlay is up but could not be confirmed to let " \
                                          "clicks through, so nothing is sent yet"

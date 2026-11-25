@@ -55,8 +55,8 @@ STALE = 0.4                     # no camera frame for this long: the hands are g
 TOAST_S = 3.0
 _IDLE_PAINT = 0.25              # seconds between repaints while nothing is shown
 
-_HINT = ("Relaxed hand moves  ·  pinch clicks  ·  two fingers scroll  ·  open hand pauses  ·  "
-         "both open hands exit")
+_HINT = ("Any hand moves  ·  pinch clicks  ·  two fingers scroll  ·  fist pauses  ·  "
+         "fist flick = desktop  ·  both open hands exit")
 _NO_ESC = "Esc is not available here: say stop air control or show both open hands"
 _STATUS_WORD = {"active": "ACTIVE", "no_hand": "NO HAND", "paused_mouse": "MOUSE PAUSE",
                 "blocked": "BLOCKED", "exiting": "EXITING"}

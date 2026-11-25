@@ -53,6 +53,9 @@ POSES = ("none", "relaxed", "point", "v", "open", "fist", "pinch", "pinch_mid")
 # (ON, OFF) thresholds on the fused ratio r (thumb-index gap / palm length).
 SENSITIVITY = {"gentle": (0.36, 0.52), "normal": (0.30, 0.45), "firm": (0.24, 0.38)}
 N_ON = {"gentle": 1, "normal": 1, "firm": 2}
+# Thumb-index gap (palm lengths, 3D) that counts as tip contact whatever the
+# joint distances say: see features().
+TIGHT_PINCH = 0.24
 PROFILES = {
     "desk": {"min_cutoff": 0.8, "beta": 8.0, "d_cutoff": 1.2, "dead": 0.0012, "offset": True},
     "air": {"min_cutoff": 0.6, "beta": 6.0, "d_cutoff": 1.0, "dead": 0.0008, "offset": False},
@@ -145,6 +148,7 @@ class Features:
     r_mid: float = 1.0             # thumb tip to middle tip, same normalisation
     index_reach: float = 2.0       # |8-0| / |5-0|: fist ~0.9, pinch ~1.1-1.6, open ~1.8
     tip_contact: bool = True       # thumb at the index TIP, not along its side
+    tip_q: float = 0.0             # |4-8| / min(|4-6|, |4-7|): < 1 = nearer the tip
     fingers: tuple = ("mid", "mid", "mid", "mid")   # index, middle, ring, pinky
     spread_deg: float = -1.0       # index vs pinky direction; -1 = unknown
     anchor: tuple = (0.5, 0.5)     # picture coords: mean of the finger bases
@@ -248,7 +252,13 @@ def features(hand, prev: Optional[Features] = None) -> Features:
         geo = world if world is not None else iso
         index_reach = _dist(geo[8], geo[0]) / max(_dist(geo[5], geo[0]), 1e-9)
         d48 = _dist(geo[4], geo[8])
-        tip_contact = d48 <= 0.9 * min(_dist(geo[4], geo[6]), _dist(geo[4], geo[7]))
+        tip_q = d48 / max(min(_dist(geo[4], geo[6]), _dist(geo[4], geo[7])), 1e-9)
+        # Thumb at the index tip, not lying along the finger's side. A pinch
+        # made with a CURLED index folds the tip back next to joints 6/7, so
+        # the ratio alone refused real pinches (live trace, Nov 2026: r_world
+        # 0.21-0.23 held 0.4 s, never pressed). Tips this close always count.
+        tight = d48 / max(_dist(geo[0], geo[9]), 1e-9) <= TIGHT_PINCH
+        tip_contact = tip_q <= 1.0 or tight
         old = prev.fingers if prev is not None and len(getattr(prev, "fingers", ())) == 4 \
             else ("mid",) * 4
         fingers = []
@@ -282,6 +292,7 @@ def features(hand, prev: Optional[Features] = None) -> Features:
             conf = 1.0
         return Features(valid3d=True, r=r, r_img=r_img, r_world=r_world, r_mid=r_mid,
                         index_reach=index_reach, tip_contact=bool(tip_contact),
+                        tip_q=float(tip_q),
                         fingers=tuple(fingers), spread_deg=spread, anchor=anchor, tip=tip,
                         size=size, angle=angle, conf=conf,
                         side=str(getattr(hand, "side", "") or ""))
