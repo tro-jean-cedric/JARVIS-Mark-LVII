@@ -25,6 +25,7 @@ Status: ✅ done · 🟡 partly done · ⬜ to do · ⛔ out of scope
 
 | Feature | Where | Commit |
 |---|---|---|
+| Screen-agent eyes: numbered tags on what can be pressed (accessibility controls + OpenCV shapes, none inside photos or on panels), wait until the pixels settle while ignoring what keeps moving, spinners / videos reported as still moving, change measured right where a step acted. Not ported: snapping an x/y click onto the nearest shape (the existing closer look covers most of it) | `plugins/_screen_eyes.py`, `plugins/_screen_loop.py`, `plugins/screen_agent.py` (setting) | COMMIT |
 | Holo Desk, full version: own full-screen window, camera or overlay mode, ONNX two-hand tracking (no MediaPipe), 11 card types, every gesture (carry, fling, scroll, two-hand resize, pull nearer, clap/spread, card circle, dock, point = "this", wrist twist), mouse/wheel/Esc, sounds, saved layouts | `gui/holo_desk.py`, `plugins/holo_desk.py`, `plugins/_holo_desk_core.py`, `plugins/_holo_desk_content.py`, `plugins/_hands_onnx.py` | `40638dc` |
 | Holo Desk: last layout comes back, closes when the computer locks, shaded 3D model, hand skeleton + pinch / hold feedback, speed-aware smoothing, settings (sensitivity, start mode, remember, show hands, sounds) | same + `core/screen_lock.py` | `ffa0805` |
 | Open the program the user means (installed-apps list + model pick, never a look-alike) | `core/installed_apps.py`, `actions/open_app.py` | `33d405e` |
@@ -81,38 +82,34 @@ built-in actions.
 Evidence = line numbers in the Torvis string dump used for the comparison
 (regenerate it as described in `TORVIS_PORT_PROMPT.md`).
 
-1. **Screen-agent eyes** — before each step, mark clickable things with
-   numbers, wait until the screen stops changing, spot loading / busy areas.
-   *Medium*, opencv + pillow. Evidence: `plugins._screen_eyes`
-   (~3795549–3796358). Target: `plugins/_screen_loop.py`.
-2. **App controls without the mouse** — press, toggle, set text / number /
+1. **App controls without the mouse** — press, toggle, set text / number /
    choice through accessibility (pywinauto UIA on Windows, AX on macOS,
    AT-SPI on Linux); works on background windows; refuses password fields.
    *Medium.* Evidence: `core.uiact` (~3298901–3299388). Target:
    `core/screenact.py`.
-3. **Instant "on it" lines + see-or-do check** — three short spoken
+2. **Instant "on it" lines + see-or-do check** — three short spoken
    acknowledgements per language, generated once and cached, said while a slow
    job runs; before a screenshot, decide whether the request needs seeing or
    doing and route things a still picture cannot answer elsewhere. *Small.*
    Evidence: ~3194539, ~3194626.
-4. **Capability self-test** — one command / voice request that checks
+3. **Capability self-test** — one command / voice request that checks
    languages, TLS, Playwright, yt-dlp, speaker capture, VAD and wake-word
    models and says what is missing. *Small–medium.* Evidence: `core.selftest`
    (~3293045–3293461). Extends `assistant_help`'s diagnose.
-5. **Numbers said as words for local voices** — numbers, dates, times,
+4. **Numbers said as words for local voices** — numbers, dates, times,
    ranges, money, units, phone numbers and sums spelled out in the user's
    language before Piper / system voices read them; cache short replies.
    *Medium*, needs `babel` (new dependency — ask first). Evidence:
    `providers._numbers`, `_speakable` (~3857518–3858394). Target:
    `providers/engine_pipeline.py` `_speakable`.
-6. **Desktop notifications** — `notify-send` / macOS / Windows toast for
+5. **Desktop notifications** — `notify-send` / macOS / Windows toast for
    finished tasks and reminders. *Small.* Evidence: `core.notify`.
-7. **Brave Search with the user's own key** — an extra web-search source.
+6. **Brave Search with the user's own key** — an extra web-search source.
    *Small.* Evidence: `core.brave` (~3265044).
-8. **Plugin sandbox** — user-added plugins run in a separate host process with
+7. **Plugin sandbox** — user-added plugins run in a separate host process with
    an allow-list of libraries. *Medium.* Evidence: `core.script_host`
    (~3292662–3292892). Target: `core/plugin_loader.py`.
-9. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+8. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
     providers, connected_apps OAuth, planet_watch (large — split it), the rest.
 
 ---
@@ -136,6 +133,7 @@ Things built and tested in code but never tried for real:
 - OpenAI-compatible voice against a real Kokoro / OpenAI server
 - open_app's resolver on Windows and Linux, and with the Gemini key
 - the tool router switched on (`"tool_router": true`) in a real Gemini Live session: that the model calls `use_feature` for listed features and the written arguments are right
+- the screen agent with the new tags on a real task: that the model answers with tag numbers and the tags land on the right things in other programs, on Windows and Linux, and with Accessibility granted on macOS
 - the items listed under "Not verified on real hardware/accounts" in
   `TORVIS_PARITY.md`
 
@@ -143,6 +141,7 @@ Things built and tested in code but never tried for real:
 
 ## Log
 
+- 2026-11-25 — Screen-agent eyes (to-do #1 after the router) ✅: tags, pixel settle with moving-area detection, change at the acted point. Real screenshot of a macOS IDE without accessibility data: 60 sensible tags from shapes alone in 0.02 s. Self-test `python -m plugins._screen_eyes_tests`. Wording check: 0 overlaps in new text.
 - 2026-11-25 — Tool router (to-do #1) built as 🟡: `use_feature` + argument writer + argument checker, off by default; 62 → 41 live declarations (−30 % characters) when on. Self-test `python -m core._tool_router_tests`. Wording check: 0 overlaps.
 - 2026-11-25 — Holo Desk full port + improvements; installed-apps resolver;
   OpenAI-compatible voice; Face Lock lock screen; HUD camera for Face Lock.

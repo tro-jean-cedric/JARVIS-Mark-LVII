@@ -13,6 +13,7 @@ entry points plus running the app.
 | `python -m plugins._holo_desk_tests` | Holo Desk logic: panels, throw physics, every gesture (carry, fling, scroll, two-hand resize, pull nearer, clap/spread, ring, dock, point, rotate), mouse, hand filter, saved desks — synthetic hands at 30 fps | stdlib only; no camera, window or network |
 | `python -m plugins._face_lock_tests` | Face Lock's unlock PIN (wrong tries, 30 s wait, no PIN) and when the lock screen covers the computer | no camera, window or saved face |
 | `python -m core._tool_router_tests` | tool router + argument checker: which declarations move behind `use_feature`, argument repair, resolve with a stand-in model (good / repaired / no answer / crash / switched off), savings on the real registries, and main.py's real `_execute_tool` routing a call | stdlib for the logic; the main.py section needs `requirements.txt` (skipped otherwise); no network or key |
+| `python -m plugins._screen_eyes_tests [--save DIR]` | screen agent's eyes: control tags mapped onto the picture, OpenCV shape tags (not in photos, not panels), numbering, drawing, pixel settle with a spinner / a drawing panel / a whole page loading (fake clock), change at the acted point, and the loop's tag targets and measurements | pillow; OpenCV for the shape part (skipped without); no screen, mouse or model |
 | `python -m core.screenview` / `python -m core.screenact` | screen-reading / input capabilities on this machine (`screenact` moves the mouse) | GUI session |
 
 `providers/_tests.py` is a hand-rolled harness: `check(name, cond, detail)`

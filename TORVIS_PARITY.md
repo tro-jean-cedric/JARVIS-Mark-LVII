@@ -70,7 +70,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | printer_control | 3D printer over LAN (status, pause, temps, fans, light) | ✅ | Bambu (MQTT/TLS), OctoPrint, Moonraker; stop behind confirm; progress announcements. Camera = snapshot, not live stream. Untested on a real printer |
 | shop_assistant | Find real prices/stock/delivery across shops, add to cart (never buy) | 🟡 | Search → page extraction (JSON-LD/meta/text) → model check; baskets; Playwright add-to-cart that blocks checkout/pay. Missing: variant choice, comparison-site follow-through, price tracking |
 | connected_apps | Work inside connected services (Notion, GitHub…) via MCP | 🟡 | Remote (streamable HTTP) and local (stdio) MCP servers, Claude-Desktop `mcpServers` config; changes behind confirm. Missing: OAuth sign-in (use a token or mcp-remote) |
-| screen_agent | Mouse/keyboard task agent driven by the screen | ✅ | look → decide → act loop on screenview/screenact; verifies each step; risky/paying steps confirmed. Live clicking untested by design |
+| screen_agent | Mouse/keyboard task agent driven by the screen | ✅ | look → decide → act loop on screenview/screenact; verifies each step; risky/paying steps confirmed. Eyes (Torvis `plugins._screen_eyes`, `plugins/_screen_eyes.py`): numbered tags on controls + OpenCV shapes (not in photos, not panels), the model answers with a tag; pixel settle that ignores and reports what keeps moving (spinners, video); change right at the acted point. Not ported: snapping an x/y click onto the nearest shape. Live clicking untested by design |
 | planet_watch | Globe/map with earthquakes, disasters, aurora, aircraft | 🟡 | USGS+EMSC quakes, GDACS+EONET disasters, NOAA aurora, OpenSky/adsb.lol aircraft, OSM-tile maps, quake watch. No interactive 3-D globe, ISS/satellites |
 | visual_panel | Show tables, charts, big numbers, checklists, countdowns on the HUD | ✅ | PIL board in the HUD palette: text/stats/list/table/bars/line/pie/progress/checklist/countdown/image/gallery. Ticking a checklist is by voice (it's a picture) |
 | live_panels | Live interactive panels (system diagnostics, weather board) | ✅ | System (psutil, 3 s refresh) and weather (Open-Meteo, no key) |
@@ -132,6 +132,8 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 - 2026-11-25 — Holo Desk full port (own window, ONNX hands, every gesture) and improvements; installed-apps resolver for open_app; OpenAI-compatible voice provider. Still open from the Torvis comparison: Face Lock lock screen (`gui.lock_screen`), tool router (`core.tool_budget`), screen-agent marks (`plugins._screen_eyes`), mouse-free app control (`core.uiact`), speakable numbers for local voices (`providers._numbers`, needs babel), Remote Mode park/smart plug, MCP OAuth sign-in, planet watch globe/ISS/satellites.
 
 - 2026-11-25 — Tool router (`core/tool_router.py`, `core/tool_args.py`, self-test `python -m core._tool_router_tests`); off by default.
+
+- 2026-11-25 — Screen-agent eyes (`plugins/_screen_eyes.py`, self-test `python -m plugins._screen_eyes_tests`).
 
 ## Totals (2026-11-24)
 

@@ -96,6 +96,8 @@ PLUGIN_SETTINGS = {
         {"key": "max_steps", "label": "Step limit", "type": "text", "default": "25"},
         {"key": "look_closer", "label": "Look closer before every click (more accurate, a little slower)",
          "type": "toggle", "default": True},
+        {"key": "marks", "label": "Put numbered tags on what can be pressed before each look",
+         "type": "toggle", "default": True},
         {"key": "model", "label": "Model (empty: automatic)", "type": "text",
          "placeholder": "e.g. gemini-2.5-pro"},
     ],
