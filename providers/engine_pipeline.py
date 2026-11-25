@@ -397,7 +397,7 @@ class PipelineEngine:
         # Both ends, concurrently: the speech model and the voice each have a
         # one-off cost, and they do not need each other.
         jobs = []
-        for part in (self._stt, self._tts):
+        for part in (self._stt, self._tts, self._llm):
             warm = getattr(part, "warmup", None)
             if warm is not None:
                 jobs.append(warm(self._log))

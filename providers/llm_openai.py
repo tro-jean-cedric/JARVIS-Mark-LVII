@@ -29,6 +29,7 @@ WHAT IS DELIBERATELY NOT HERE
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import contextlib
@@ -477,6 +478,38 @@ class OpenAICompatLLM:
         buf.feed([{"index": i, **tc} for i, tc in
                   enumerate(msg.get("tool_calls") or [])])
         return text, buf.drain()
+
+    async def warmup(self, log=print) -> None:
+        """Load a LOCAL model before the first turn.
+
+        Measured live (Nov 2026, Ollama qwen3.5:35b): the first turn after
+        launch waited for the model to load past main.py's 30 s "no response"
+        watchdog, which rebuilt the session and dropped that turn; the second
+        turn answered in 8 s. One token here, at startup, takes that load off
+        the user's first sentence. Only for a server on this machine: a cloud
+        endpoint has nothing to load and every call there may cost money.
+        Never raises."""
+        try:
+            host = (self.base.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0]).lower()
+            if host not in ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"):
+                return
+            t0 = time.monotonic()
+
+            def _one_token():
+                with self._httpx.Client(timeout=300.0, trust_env=self._trust_env) as cl:
+                    body = self._body([{"role": "user", "content": "hi"}], None, False, None)
+                    body["max_tokens"] = 1
+                    r = cl.post(f"{self.base}/chat/completions", headers=self._headers(),
+                                json=body)
+                    return r.status_code
+
+            code = await asyncio.to_thread(_one_token)
+            log(f"[Pipeline] language model warm ({time.monotonic() - t0:.1f}s, HTTP {code})")
+        except Exception as e:
+            try:
+                log(f"[Pipeline] language model warm-up skipped: {e}")
+            except Exception:
+                pass
 
     # -- streaming, async: this is what the pipeline engine will use ---------
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
