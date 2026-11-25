@@ -165,6 +165,29 @@ def _ddg_news(query: str, max_results: int = 8) -> list[dict]:
     return results
 
 
+def _brave(kind: str, query: str, max_results: int):
+    """Brave Search with the user's own key (core/brave.py). None when no key
+    is set, when Brave fails, or when it found nothing, so the caller moves
+    on to the next source."""
+    try:
+        from core import brave
+        if not brave.available():
+            return None
+        rows = brave.search(kind, query, count=max_results)
+    except Exception as e:
+        print(f"[WebSearch] Brave lookup failed ({type(e).__name__})")
+        return None
+    if rows:
+        print(f"[WebSearch] {len(rows)} {kind} result(s) from Brave")
+    return rows or None
+
+
+def _web_results(query: str, max_results: int = 6) -> list[dict]:
+    """Plain result rows: Brave when a key is set, DuckDuckGo otherwise or
+    when Brave has no answer."""
+    return _brave("web", query, max_results) or _ddg_search(query, max_results=max_results)
+
+
 def _format_ddg(query: str, results: list[dict]) -> str:
     if not results:
         return f"No results found for: {query}"
@@ -241,7 +264,11 @@ def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
 # ── Modes ──────────────────────────────────────────────────────────────────────
 
 def _search(query: str) -> str:
-    """Default search — Gemini grounded, DDG fallback."""
+    """Default search: Brave (with the user's key), then Gemini grounding,
+    then DDG."""
+    rows = _brave("web", query, 6)
+    if rows:
+        return _format_ddg(query, rows)
     try:
         return _gemini_search(query)
     except Exception as e:
@@ -252,7 +279,7 @@ def _search(query: str) -> str:
 
 def _news(query: str) -> str:
     """
-    DDG first, Gemini as backup.
+    Brave first when the user has set a key, then DDG, Gemini as backup.
 
     The old version raced both backends in parallel and kept the first answer.
     That burned one google_search grounding call on *every* news request —
@@ -267,6 +294,10 @@ def _news(query: str) -> str:
     """
     gemini_query = f"latest news today: {query}" if query else "top world news today"
     ddg_query    = query if query else "world news today"
+
+    rows = _brave("news", ddg_query, 8)
+    if rows:
+        return _format_news(ddg_query, rows)
 
     def _ddg_attempt() -> str:
         return _format_news(ddg_query, _ddg_news(ddg_query, max_results=8))
@@ -297,7 +328,7 @@ def _research(query: str) -> str:
         return _gemini_search(research_query)
     except Exception as e:
         _log_gemini_failure("Gemini research", e)
-        results = _ddg_search(query, max_results=10)
+        results = _web_results(query, max_results=10)
         return _format_ddg(query, results)
 
 
@@ -308,7 +339,7 @@ def _price(query: str) -> str:
         return _gemini_search(price_query)
     except Exception as e:
         _log_gemini_failure("Gemini price", e)
-        results = _ddg_search(f"{query} price buy", max_results=6)
+        results = _web_results(f"{query} price buy", max_results=6)
         return _format_ddg(query, results)
 
 
@@ -325,7 +356,7 @@ def _compare(items: list[str], aspect: str) -> str:
     all_results: dict[str, list] = {}
     for item in items:
         try:
-            all_results[item] = _ddg_search(f"{item} {aspect}", max_results=3)
+            all_results[item] = _web_results(f"{item} {aspect}", max_results=3)
         except Exception:
             all_results[item] = []
 

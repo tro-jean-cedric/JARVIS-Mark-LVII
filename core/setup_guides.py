@@ -342,6 +342,23 @@ EXTRA_GUIDES: dict[str, dict] = {
         ],
         "done": "Ask for something that needs a model, e.g. \"make me a 5-question quiz on the solar system\".",
     },
+    "brave_search": {
+        "title": "Brave Search — your own key for web searches",
+        "aliases": ["brave", "brave search", "search key", "web search", "search engine"],
+        "time": "about 3 minutes",
+        "steps": [
+            ("Sign up on Brave's Search API dashboard and pick the free plan (a card may be asked "
+             "for to confirm the account; the free plan is not charged).",
+             "https://api-dashboard.search.brave.com/"),
+            "Under API KEYS, create a key and copy it.",
+            "In the assistant, open SETUP → 🔌 ENGINE & PROVIDERS, scroll to WEB SEARCH, paste the "
+            "key, press SAVE, then TEST.",
+        ],
+        "done": "Say \"search the web for today's weather in Paris\". The console shows "
+                "\"results from Brave\" when it was used.",
+        "note": "Without a key nothing changes: searches use Gemini and DuckDuckGo as before. "
+                "If Brave fails or the monthly allowance runs out, those take over by themselves.",
+    },
     "remote_mode": {
         "title": "Remote Mode — keep awake, hibernate, Wake-on-LAN",
         "aliases": ["remote mode", "wake on lan", "wol", "wake", "hibernate", "keep awake",

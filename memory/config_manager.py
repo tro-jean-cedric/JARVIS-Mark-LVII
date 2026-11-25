@@ -355,6 +355,17 @@ def save_desktop_notifications_enabled(enabled: bool) -> None:
     _save_flag("desktop_notifications", enabled)
 
 
+def get_brave_key() -> str:
+    """The user's own Brave Search API key, or '' when none is set.
+    With one, web searches ask Brave before DuckDuckGo (core/brave.py)."""
+    return str(load_api_keys().get("brave_api_key", "") or "").strip()
+
+
+def save_brave_key(key: str) -> None:
+    """Store (or, with '', remove) the Brave Search API key."""
+    _save_flag("brave_api_key", str(key or "").strip())
+
+
 MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
 
 

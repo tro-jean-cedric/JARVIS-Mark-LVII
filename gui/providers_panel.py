@@ -24,7 +24,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
     QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
-    QPen, QPixmap, QRadialGradient, QShortcut,
+    QDesktopServices, QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -90,6 +90,8 @@ class ProvidersOverlay(_HudOverlay):
     # (provider id, [(value, label), ...]) from a worker that went and asked an
     # endpoint what it offers.
     _models_ready = pyqtSignal(str, list)
+    # (worked, message) from the worker that tried the Brave Search key.
+    _brave_ready = pyqtSignal(bool, str)
     _OW = 760                       # the window's own minimum is 820
 
     # Which provider fills each slot, and what the slot is FOR — in the words
@@ -122,6 +124,8 @@ class ProvidersOverlay(_HudOverlay):
         # nothing in this folder may run before somebody opens it.
         self._live_ready.connect(self._on_live_ready)
         self._models_ready.connect(self._on_models_ready)
+        self._brave_ready.connect(self._on_brave_ready)
+        self._brave_status = None
         self._model_cache: dict[str, list] = {}
         self._fetching: set = set()
         for _kind in ("tts", "stt", "llm"):
@@ -616,6 +620,7 @@ class ProvidersOverlay(_HudOverlay):
 
         self._body_lay.addWidget(self._sidecar_box_widget())
         self._body_lay.addWidget(self._coding_box_widget())
+        self._body_lay.addWidget(self._search_box_widget())
         self._body_lay.addStretch(1)
         self._update_footer()
 
@@ -825,6 +830,68 @@ class ProvidersOverlay(_HudOverlay):
         self._more[pid] = not self._more.get(pid)
         self._remember_edits()
         QTimer.singleShot(0, self._rebuild_body)
+
+    def _search_box_widget(self) -> QWidget:
+        """The user's own Brave Search key (core/brave.py). Saved on its own
+        SAVE, not on APPLY: it changes no engine, so nothing restarts."""
+        from memory.config_manager import get_brave_key
+        head = self._label("🔎  WEB SEARCH", 9, C.PRI, bold=True)
+        w, lay = self._box([head])
+        lay.addWidget(self._label(
+            "Optional. With your own Brave Search API key, web and news "
+            "searches ask Brave first. Gemini and DuckDuckGo stay as the "
+            "fallback; with no key, they are all that is used.", 7, C.TEXT_DIM))
+        self._brave_edit = self._line(get_brave_key())
+        self._brave_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._brave_edit.setPlaceholderText("Brave Search API key")
+        lay.addWidget(self._brave_edit)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self._btn("SAVE", self._brave_save, C.PRI))
+        row.addWidget(self._btn("TEST", self._brave_test, C.PRI))
+        row.addWidget(self._btn("GET A FREE KEY", lambda _=0: QDesktopServices.openUrl(
+            QUrl("https://api-dashboard.search.brave.com/"))))
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._brave_status = self._label("", 7, C.TEXT_DIM)
+        lay.addWidget(self._brave_status)
+        return w
+
+    def _brave_say(self, text: str, colour: str) -> None:
+        lb = self._brave_status
+        if lb is not None:
+            lb.setText(text)
+            lb.setStyleSheet(f"color: {colour}; background: transparent; border: none;")
+
+    def _brave_save(self, _=0) -> None:
+        from memory.config_manager import save_brave_key
+        key = self._brave_edit.text().strip()
+        save_brave_key(key)
+        self._brave_say("✓  Key saved." if key else "Key removed — searches use "
+                        "Gemini and DuckDuckGo.", C.GREEN if key else C.TEXT_DIM)
+
+    def _brave_test(self, _=0) -> None:
+        key = self._brave_edit.text().strip()
+        if not key:
+            self._brave_say("Paste a key first.", C.TEXT_DIM)
+            return
+        self._brave_say("checking…", C.TEXT_DIM)
+
+        def work():
+            try:
+                from core import brave
+                ok, msg = brave.probe(key=key)
+            except Exception as e:
+                ok, msg = False, type(e).__name__
+            self._brave_ready.emit(ok, msg)
+
+        threading.Thread(target=work, daemon=True, name="brave-test").start()
+
+    def _on_brave_ready(self, ok: bool, msg: str) -> None:
+        try:
+            self._brave_say(("✓  " if ok else "✕  ") + msg, C.GREEN if ok else C.ACC)
+        except RuntimeError:
+            pass        # the box was rebuilt while the test ran
 
     def _sidecar_box_widget(self) -> QWidget:
         head = self._label("⚡  BACKGROUND REQUESTS", 9, C.PRI, bold=True)
@@ -1135,6 +1202,16 @@ class ProvidersOverlay(_HudOverlay):
 
         # ONE write, not five. See save_providers for what the five cost.
         creds = {sid: self._values(sid) for sid in list(self._edits)}
+
+        # A Brave key typed in and confirmed with this button instead of its
+        # own SAVE is kept too.
+        try:
+            from memory.config_manager import get_brave_key, save_brave_key
+            typed = self._brave_edit.text().strip()
+            if typed != get_brave_key():
+                save_brave_key(typed)
+        except (AttributeError, RuntimeError):
+            pass                # the box is not on screen
 
         save_providers(
             mode=self._mode,

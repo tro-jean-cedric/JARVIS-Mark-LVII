@@ -310,6 +310,22 @@ def check_numbers():
     return FAIL, f"numbers came out as: {de!r} / {fr!r}", "pip install --upgrade babel num2words"
 
 
+def check_brave(network: bool):
+    """The user's own Brave Search key, when one is set: one tiny query."""
+    from core import brave
+    if not brave.available():
+        return OFF, "no Brave Search key (web searches use Gemini and DuckDuckGo)", \
+            "optional: add a free key under SETUP -> ENGINE & PROVIDERS -> WEB SEARCH (api-dashboard.search.brave.com)"
+    if not network:
+        return PASS, "a Brave key is set; not tried (offline)", ""
+    t = time.monotonic()
+    ok, msg = brave.probe()
+    if ok:
+        return PASS, f"{msg} in {time.monotonic() - t:.1f} s", ""
+    return FAIL, f"the Brave key is set but the search failed: {msg}", \
+        "check the key and its monthly allowance at api-dashboard.search.brave.com"
+
+
 def check_notifications():
     """Whether the system's notifications can be used (nothing is shown)."""
     from core import notify
@@ -422,6 +438,7 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("speaker_capture", check_speaker_capture, False),
     ("speech_detector", check_speech_detector, False),
     ("numbers", check_numbers, False),
+    ("brave", check_brave, True),
     ("notifications", check_notifications, False),
     ("wake_word", check_wake_word, False),
     ("screen", check_screen, False),
