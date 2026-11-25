@@ -326,6 +326,28 @@ def check_brave(network: bool):
         "check the key and its monthly allowance at api-dashboard.search.brave.com"
 
 
+def check_plugin_sandbox():
+    """Whether a plugin the user added can be given a process of its own."""
+    import json
+    import subprocess
+    from core import plugin_sandbox
+    if not plugin_sandbox.enabled():
+        return OFF, "added plugins run inside the app (the sandbox is switched off)", \
+            'set "plugin_sandbox": true to give each one its own process'
+    t = time.monotonic()
+    r = subprocess.run(plugin_sandbox.host_command("--ping"), cwd=str(ROOT), capture_output=True,
+                       text=True, timeout=CHECK_TIMEOUT_S - 2)
+    try:
+        got = json.loads((r.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        got = {}
+    if got.get("ok"):
+        return PASS, (f"added plugins get a process of their own ({got.get('allowed')} importable "
+                      f"modules, started in {time.monotonic() - t:.1f} s)"), ""
+    return FAIL, f"a plugin process could not start: {(r.stderr or r.stdout).strip()[-200:]}", \
+        'reinstall the requirements, or set "plugin_sandbox": false to run added plugins inside the app'
+
+
 def check_notifications():
     """Whether the system's notifications can be used (nothing is shown)."""
     from core import notify
@@ -440,6 +462,7 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("numbers", check_numbers, False),
     ("brave", check_brave, True),
     ("notifications", check_notifications, False),
+    ("plugin_sandbox", check_plugin_sandbox, False),
     ("wake_word", check_wake_word, False),
     ("screen", check_screen, False),
     ("app_files", check_app_files, False),

@@ -85,6 +85,9 @@ class PluginRecord:
     user: bool = False
     review: bool = False
     stem: str = ""
+    # For a user plugin running in its own process (core/plugin_sandbox.py):
+    # the SandboxedPlugin that `run` calls into. None when it runs in ours.
+    sandbox: object = None
 
 
 class PluginRegistry:
@@ -106,6 +109,10 @@ class PluginRegistry:
         # A user-added plugin starts OFF; bundled ones keep the opt-out default.
         return get_plugin_enabled(name, name not in self._user_names)
 
+    @staticmethod
+    def _enabled_user(name: str) -> bool:
+        return get_plugin_enabled(name, False)
+
     # -- called by the Plugin Manager after a user plugin was added/approved/removed --
     def refresh_user_plugin(self, stem: str) -> tuple[bool, str]:
         """Bring this running registry in line with user_plugins/<stem>.py:
@@ -114,6 +121,7 @@ class PluginRegistry:
         try:
             for n, r in list(self._plugins.items()):
                 if r.user and r.stem == stem:
+                    _stop_host(r)
                     del self._plugins[n]
                     self._user_names.discard(n)
             self._all_records = [r for r in self._all_records
@@ -127,8 +135,10 @@ class PluginRegistry:
                                    review=True, stem=stem, error=problem)
             else:
                 _extend_package_path()
-                rec = _load_file(path, self._plugins_dir or BUNDLED_PLUGINS_DIR,
-                                 self._core_names, self._plugins, user=True)
+                rec = _load_user(path, self._plugins_dir or BUNDLED_PLUGINS_DIR,
+                                 self._core_names, self._plugins)
+                if rec.valid and not self._enabled_user(rec.name):
+                    _stop_host(rec)
             self._all_records.append(rec)
             if rec.valid:
                 self._plugins[rec.name] = rec
@@ -378,15 +388,7 @@ def _load_file(path: Path, plugins_dir: Path, core_tool_names: set[str],
             sys.modules.pop(module_name, None)
             raise
 
-        rec = _validate(module, path.name)
-
-        if rec.valid and rec.name in core_tool_names:
-            rec = PluginRecord(name=rec.name, file=path.name,
-                                error=f"Name '{rec.name}' collides with a core tool — rejected.")
-        elif rec.valid and rec.name in valid:
-            other = valid[rec.name].file
-            rec = PluginRecord(name=rec.name, file=path.name,
-                                error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
+        rec = _check_name(_validate(module, path.name), core_tool_names, valid)
 
     except Exception as e:
         rec = PluginRecord(name=path.stem, file=path.name,
@@ -395,6 +397,75 @@ def _load_file(path: Path, plugins_dir: Path, core_tool_names: set[str],
     rec.user = user
     rec.stem = path.stem
     return rec
+
+
+def _check_name(rec: PluginRecord, core_tool_names: set[str],
+                valid: dict[str, PluginRecord]) -> PluginRecord:
+    if rec.valid and rec.name in core_tool_names:
+        return PluginRecord(name=rec.name, file=rec.file,
+                            error=f"Name '{rec.name}' collides with a core tool — rejected.")
+    if rec.valid and rec.name in valid:
+        other = valid[rec.name].file
+        return PluginRecord(name=rec.name, file=rec.file,
+                            error=f"Name '{rec.name}' already used by plugin '{other}' — rejected.")
+    return rec
+
+
+def _stop_host(rec: PluginRecord) -> None:
+    host = getattr(rec, "sandbox", None)
+    if host is not None:
+        try:
+            host.stop()
+        except Exception:
+            pass
+
+
+def _load_sandboxed(path: Path, core_tool_names: set[str],
+                    valid: dict[str, PluginRecord]) -> PluginRecord:
+    """Start a user plugin in its own process (core/script_host.py) and build
+    its record from the declaration that process sends back. Never raises."""
+    try:
+        from core.plugin_sandbox import SandboxedPlugin
+        host = SandboxedPlugin(path.stem)
+        decl, err = host.start()
+        if decl is None:
+            rec = PluginRecord(name=path.stem, file=path.name, error=err)
+        else:
+            settings = decl.get("settings")
+            if isinstance(settings, dict) and isinstance(settings.get("action"), dict) \
+                    and settings["action"].get("run") == "host":
+                settings = {**settings, "action": {**settings["action"], "run": host.action}}
+            rec = PluginRecord(
+                name=decl.get("name") or path.stem, description=decl.get("description") or "",
+                parameters=decl.get("parameters") or dict(_DEFAULT_PARAMS), run=host.run,
+                file=path.name, valid=True, settings=settings,
+                behavior=decl.get("behavior"), scheduling=decl.get("scheduling"),
+                tier=decl.get("tier"), brief=decl.get("brief"), sandbox=host)
+            checked = _check_name(rec, core_tool_names, valid)
+            if checked is not rec:
+                host.stop()
+                rec = checked
+    except Exception as e:
+        traceback.print_exc()
+        rec = PluginRecord(name=path.stem, file=path.name,
+                           error=f"Could not start its own process: {e}")
+    rec.user = True
+    rec.stem = path.stem
+    return rec
+
+
+def _load_user(path: Path, plugins_dir: Path, core_tool_names: set[str],
+               valid: dict[str, PluginRecord]) -> PluginRecord:
+    """An approved user plugin: in its own process unless the user switched
+    the sandbox off ("plugin_sandbox": false), then in ours as before."""
+    try:
+        from core.plugin_sandbox import enabled as _sandbox_on
+        sandboxed = _sandbox_on()
+    except Exception:
+        sandboxed = True
+    if sandboxed:
+        return _load_sandboxed(path, core_tool_names, valid)
+    return _load_file(path, plugins_dir, core_tool_names, valid, user=True)
 
 
 def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
@@ -447,7 +518,11 @@ def discover_plugins(plugins_dir: Path, core_tool_names: set[str],
                     rec = PluginRecord(name=_record_name(path.stem), file=path.name,
                                        user=True, review=True, stem=path.stem, error=problem)
                 else:
-                    rec = _load_file(path, plugins_dir, core_tool_names, valid, user=True)
+                    rec = _load_user(path, plugins_dir, core_tool_names, valid)
+                    # A switched-off plugin's process is not kept waiting; it
+                    # starts on its first call once switched on.
+                    if rec.valid and not PluginRegistry._enabled_user(rec.name):
+                        _stop_host(rec)
             all_records.append(rec)
             if rec.valid:
                 valid[rec.name] = rec

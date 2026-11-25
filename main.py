@@ -1,3 +1,16 @@
+import sys as _sys
+
+# A frozen build has no `python` to start an added plugin's own process with
+# (core/plugin_sandbox.host_command), so this program does it, before
+# anything of the app is loaded.
+if getattr(_sys, "frozen", False) and _sys.argv[1:2] == ["--plugin-host"]:
+    import os as _os
+    from core.script_host import main as _host_main
+    _code = _host_main(_sys.argv[2:])
+    _sys.stdout.flush()
+    _sys.stderr.flush()
+    _os._exit(_code)
+
 import platform as _platform
 import subprocess as _subprocess
 

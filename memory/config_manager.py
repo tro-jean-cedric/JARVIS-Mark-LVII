@@ -366,6 +366,17 @@ def save_brave_key(key: str) -> None:
     _save_flag("brave_api_key", str(key or "").strip())
 
 
+def get_plugin_sandbox_enabled() -> bool:
+    """Whether plugins the user added run in a process of their own
+    (core/plugin_sandbox.py). On by default; off imports them into the app
+    as before."""
+    return bool(load_api_keys().get("plugin_sandbox", True))
+
+
+def save_plugin_sandbox_enabled(enabled: bool) -> None:
+    _save_flag("plugin_sandbox", enabled)
+
+
 MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
 
 

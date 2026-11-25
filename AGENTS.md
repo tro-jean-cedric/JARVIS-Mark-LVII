@@ -78,6 +78,18 @@ helper it came with still match the SHA-256 recorded when the user approved it
 REVIEW and never imported. Do not write into `user_plugins/` or its approval
 records yourself.
 
+An approved user plugin runs in **a process of its own** (`core/script_host.py`,
+`core/plugin_sandbox.py`; `"plugin_sandbox": false` turns this off). Inside it:
+its own imports may use only Python's standard library, the libraries in
+`requirements.txt` and the app's `core` / `memory` / `plugins` / `actions` /
+`providers` / `config` packages (Qt, `gui`, `ui`, `main` are refused, and
+nothing can be pip-installed for it); `player` offers only the methods in
+`script_host.PLAYER_METHODS` (log, content panel, quiz, review, video, image,
+subtitles, `request_say`), with plain values and functions as arguments;
+`print()` goes to the app's log; `session_memory` is `None`. A crash or a
+`run()` that hangs past two minutes stops that process only, and the next call
+starts it again. Bundled plugins in `plugins/` are not affected.
+
 Shared helpers available to plugins: `plugins/_announce.py` (speak later from a
 thread via `player.request_say`, small JSON store in `memory/plugin_data/`) and
 `plugins/_camera.py` (one shared webcam stream; never open your own

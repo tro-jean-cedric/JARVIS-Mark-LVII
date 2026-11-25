@@ -25,6 +25,7 @@ Status: ✅ done · 🟡 partly done · ⬜ to do · ⛔ out of scope
 
 | Feature | Where | Commit |
 |---|---|---|
+| Plugin sandbox: every plugin the user added runs in a process of its own (`python -m core.script_host <stem>`, which checks the approval hashes again by itself). Its own imports are limited to the standard library, the libraries in requirements.txt and the app's packages (Qt / gui / ui / main refused, nothing to pip install); `player` calls, quiz grading and the settings TEST button are carried across; prints go to the log. A crash, an exit or a run() hanging past 2 min stops only that process, which starts again on the next call. Switched-off plugins keep no process. Setting `plugin_sandbox` (on). Bundled plugins unchanged. A crash-and-mistake boundary, not a security one (the standard library has os / subprocess). Also: a frozen build starts hosts with its own program (`--plugin-host`). Not ported: Torvis's packaged-program stand-in for `python -c` / `-m` / script runs | `core/script_host.py`, `core/plugin_sandbox.py`, `core/plugin_loader.py`, `main.py`, `core/selftest.py` | this commit |
 | Brave Search with the user's own key: web and news searches ask Brave first when a key is set (Gemini grounding and DuckDuckGo stay as fallbacks; research / price / compare use it instead of DuckDuckGo as their fallback); key under SETUP → ENGINE & PROVIDERS → WEB SEARCH with SAVE / TEST; country from the system locale, language from the active languages; setup guide; `brave` self-test check. No key = nothing changes. Not ported: Torvis's relay (out of scope) | `core/brave.py`, `actions/web_search.py`, `gui/providers_panel.py`, `memory/config_manager.py`, `core/selftest.py`, `core/setup_guides.py` | `b769815` |
 | Desktop notifications: the system's own banner when a background task finishes or fails, or a reminder fires, while the user is in another window (none when JARVIS is in front): macOS osascript (text passed as arguments, never as code), Linux notify-send, Windows win10toast in a child process. Setting `desktop_notifications` (on). Seen by the user on macOS | `core/notify.py`, `core/tasks/desktop.py`, `main.py`, `core/selftest.py` | `7321479` |
 | Numbers said as words for local voices: numbers, decimals, grouped thousands, negatives, money (symbols and codes, CFA francs included), units and percentages (CLDR names per language), dates (ISO and the locale's numeric form), clock times, phone numbers, version numbers, ranges and sums, English ordinals - spelt out in the user's language before Piper / system / OpenAI-compatible voices read them (ElevenLabs is left alone). The words for ranges, sums and clock times are written once per language by the model and cached (English built in). Results cached in memory. Not ported: caching the recorded audio of short replies (Torvis `_voice_cache`). New dependencies `babel` + `num2words` (approved) | `providers/_numbers.py`, `providers/_speakable.py`, `providers/engine_pipeline.py`, `core/selftest.py` | `350aa78` |
@@ -88,10 +89,7 @@ built-in actions.
 Evidence = line numbers in the Torvis string dump used for the comparison
 (regenerate it as described in `TORVIS_PORT_PROMPT.md`).
 
-1. **Plugin sandbox** — user-added plugins run in a separate host process with
-   an allow-list of libraries. *Medium.* Evidence: `core.script_host`
-   (~3292662–3292892). Target: `core/plugin_loader.py`.
-2. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+1. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
     providers, connected_apps OAuth, planet_watch (large — split it), the rest.
 
 ---
@@ -120,6 +118,7 @@ Things built and tested in code but never tried for real:
 - the "on it" line heard by a person (the queue and the transcript were checked, the sound itself was not listened to), and with the local voice engine (switched off there by design)
 - the self-check asked for by voice in the running app (the voice path is covered by the self-test; the in-app attempt was stopped because the screen had locked with the test copy's microphone open); the checks on Windows and Linux
 - numbers as words heard by a person with Piper / Kokoro in languages other than French (checked here by transcribing a French Piper voice with Whisper, and the Mac's German system voice); the learnt words for languages other than German, French and Spanish
+- the plugin sandbox in the running app with a real added plugin through the Plugin Manager window (the same install / approve / discover / run path was run for real from code), and on Windows and Linux
 - Brave Search with a real key: never run with one (none configured here); only checked against the real API with an invented key, which Brave refuses as expected
 - desktop notifications on Windows (win10toast in a child process) and Linux (notify-send); a reminder or a finished task triggering one in the running app
 - the items listed under "Not verified on real hardware/accounts" in
@@ -129,6 +128,7 @@ Things built and tested in code but never tried for real:
 
 ## Log
 
+- 2026-11-25 — Plugin sandbox ✅ (`core/script_host.py`, `core/plugin_sandbox.py`). Run for real: a plugin with a helper installed and approved through the Plugin Manager's own functions ran in its own process (different pid), `player.write_log` reached the app, and after its helper was changed on disk the plugin's process refused to load it by itself. Crash (os._exit), exception, 1.5 s hang, sys.exit at import, Qt import and a library not in requirements all tested with real processes. Self-test `python -m core._sandbox_tests` (46 checks); new `plugin_sandbox` check in `core.selftest`. Wording check: 0 overlaps.
 - 2026-11-25 — Brave Search with the user's own key ✅ (`core/brave.py`). No Brave key on this computer, so no real search was made; one real request with an invented key showed Brave answers 422 `SUBSCRIPTION_TOKEN_INVALID` (not 401), now reported as a refused key and not retried. Panel box rendered offscreen and its SAVE / TEST clicked against a stand-in config and transport. Self-test `python -m core._brave_tests [--live]` (57 checks); new `brave` check in `core.selftest`. Wording check: 0 overlaps (new files and added lines).
 - 2026-11-25 — Desktop notifications ✅ (`core/notify.py`). Real banner on this Mac, screenshot taken and seen by the user; a message built to break out of AppleScript was shown as plain text and ran nothing. Self-test `python -m core._notify_tests [--live]`; `notifications` check in `core.selftest`. Wording check: 0 overlaps.
 - 2026-11-25 — Numbers said as words ✅ (`providers/_speakable.py`, babel + num2words added with approval). Heard for real: a French Piper voice, transcribed by Whisper, dropped the minus of "-3 °C", said "F" for FCFA and garbled "25/11/2026" as written; with the conversion it said "moins trois", "francs CFA", "25 novembre 2026". (The Mac's German system voice already read numbers correctly - no difference there.) Real learnt words for German, French, Spanish. Self-test `python -m providers._speakable_tests [--live]`; new `numbers` check in `core.selftest`. Wording check: 0 overlaps.
