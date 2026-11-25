@@ -70,7 +70,7 @@ built-in actions.
 | window_control | macOS move to another monitor; Linux Wayland |
 | cloud_agent | parity with Torvis's hosted "cloud body" where it makes sense self-hosted |
 | Remote Mode | sleep, then wake on a timer (`core.park`); switch the computer's smart plug (Tuya cloud, Shelly cloud, VoiceMonkey); automatic Wake-on-LAN setup on Windows (adapter settings, Fast Startup off); a settings panel |
-| Tool router (`core/tool_router.py`, `core/tool_args.py`, commit COMMIT) | built and self-tested, **off by default** (`"tool_router": true` in config) and never tried against live Gemini; not ported: the live model's own first-try arguments and an earlier tool result as extra context for the argument writer; bundled plugins with no `tier` (build_guide, calorie_counter, fridge_chef, planet_watch…) stay direct — tag them `"extra"` to move them behind the router |
+| Tool router (`core/tool_router.py`, `core/tool_args.py`, commit `c7f8738`) | built and self-tested, **off by default** (`"tool_router": true` in config) and never tried against live Gemini; not ported: the live model's own first-try arguments and an earlier tool result as extra context for the argument writer; bundled plugins with no `tier` (build_guide, calorie_counter, fridge_chef, planet_watch…) stay direct — tag them `"extra"` to move them behind the router |
 | Voice providers | Gemini as speech-to-text and as voice (user's own key); Silero voice-activity detection as an option (keep the energy detector as default) |
 | live_subtitles · whatsapp_call | built, but never tested against real audio loopback / real WhatsApp |
 
