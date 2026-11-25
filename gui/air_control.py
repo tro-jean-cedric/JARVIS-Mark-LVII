@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import QWidget
 
 from .style import chamfer, hud_font, px_font, with_alpha
 from .theme import C
+from plugins import _gesture_trace as _trace
 
 FPS = 60
 HINT_S = 10.0                   # the gesture hint shows this long after opening
@@ -610,6 +611,7 @@ class AirControlWindow(QWidget):
         if self._hands_at != self._filtered_at:
             self._states = list(self.filter.update(self._hands, self._hands_at, ident))
             self._filtered_at = self._hands_at
+            _trace.frame("air", self._hands_at, self._hands, self.filter)
         elif self._states and now - self._hands_at > STALE:
             self._states = list(self.filter.update([], now, ident))
         real = None
@@ -624,9 +626,12 @@ class AirControlWindow(QWidget):
             # Not confirmed click-through: never send anything but a release.
             actions = [a for a in actions if a and a[0] == "release_all"]
         if actions:
+            _trace.items("act", "air", actions)
             self.dispatcher.run(actions)
         exit_why = None
-        for ev in self.engine.take_events() or []:
+        _evs = self.engine.take_events() or []
+        _trace.items("ev", "air", _evs)
+        for ev in _evs:
             if not ev:
                 continue
             kind = ev[0]

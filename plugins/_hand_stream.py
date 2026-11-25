@@ -26,6 +26,8 @@ import time
 import traceback
 from typing import Callable, Optional
 
+from plugins import _gesture_trace as _trace
+
 TRACK_WIDTH = 640        # the hand models gain nothing from a bigger picture
 PICTURE_WIDTH = 1280     # the picture handed back for display
 
@@ -208,6 +210,8 @@ class HandStream:
                             print(f"[HandStream] {self.name}: hand tracking error: {msg}")
                             last_err, last_err_at = msg, now
                         hands = []
+                if _trace.enabled():
+                    _trace.snapshot(frame, hands)
                 img = _shrink(frame, PICTURE_WIDTH) if self._wants_picture() else None
                 if stop.is_set():
                     break

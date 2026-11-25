@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import QWidget
 
 from .style import chamfer, hud_font, mono_font, px_font, with_alpha
 from .theme import C
+from plugins import _gesture_trace as _trace
 
 FPS = 60
 _GLYPH = {"clock": "◷", "system": "▤", "weather": "☁", "news": "◈", "notes": "✎",
@@ -442,6 +443,7 @@ class HoloDeskWindow(QWidget):
         if self.hands_at != self._filtered_at:
             self._ptrs = list(self.filter.update(self.hands, self._to_screen, self.hands_at))
             self._filtered_at = self.hands_at
+            _trace.frame("desk", self.hands_at, self.hands, getattr(self.filter, "_inner", None))
         elif self._ptrs and now - self.hands_at > 0.4:
             self._ptrs = list(self.filter.update([], self._to_screen, now))
         pointers = list(self._ptrs)
@@ -453,6 +455,7 @@ class HoloDeskWindow(QWidget):
             self.sounds.play("tick")                   # a soft tick as each pinch lands
         self._was_down = down
         events = self.inp.update(pointers, now) + self.desk.step(dt)
+        _trace.items("ev", "desk", events)
         for ev in events:
             self._event(ev, now)
         self.effects = [e for e in self.effects if now - e[3] < 0.7]
