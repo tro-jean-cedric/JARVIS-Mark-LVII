@@ -65,3 +65,6 @@ memory/plugin_data/
 
 # ── Plugins the user added through the Plugin Manager (their own files) ─────
 user_plugins/
+
+# ── Claude Code worktrees (local checkouts, never commit) ─────────────────────
+.claude/worktrees/
