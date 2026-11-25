@@ -598,6 +598,114 @@ def _live_call(contents, config, timeout_ms: int, key: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Speech for a fixed line, in the assistant's own Live voice
+# ─────────────────────────────────────────────────────────────────────────────
+# Used by core/on_it.py to record a handful of very short lines once, so they
+# can be played the instant a slow tool starts — while the live session itself
+# is waiting on that tool and cannot say anything. Same model and same voice as
+# the conversation, so the line sounds like the assistant and not like a
+# second, different speaker.
+_SPEAK_SYSTEM = (
+    "Read the user's text aloud exactly as written, word for word, in a calm, "
+    "natural speaking voice. Do not add, answer, translate or change anything, "
+    "and say nothing before or after it."
+)
+
+
+async def _live_speech(text: str, voice: str, key: str, timeout_s: float) -> tuple[bytes, str]:
+    from google import genai
+    from google.genai import types as gtypes
+
+    cl = genai.Client(api_key=key, http_options={"api_version": "v1beta"})
+    kwargs = {"response_modalities": ["AUDIO"], "system_instruction": _SPEAK_SYSTEM,
+              "output_audio_transcription": {}}
+    if voice:
+        kwargs["speech_config"] = gtypes.SpeechConfig(voice_config=gtypes.VoiceConfig(
+            prebuilt_voice_config=gtypes.PrebuiltVoiceConfig(voice_name=voice)))
+    cm = cl.aio.live.connect(model=_live_model(), config=gtypes.LiveConnectConfig(**kwargs))
+    session = await asyncio.wait_for(cm.__aenter__(), 30)
+    try:
+        await session.send_client_content(
+            turns={"role": "user", "parts": [{"text": text}]}, turn_complete=True)
+        pcm = bytearray()
+        said: list[str] = []
+
+        async def drain():
+            async for resp in session.receive():
+                sc = getattr(resp, "server_content", None)
+                tr = getattr(sc, "output_transcription", None) if sc else None
+                if tr is not None and getattr(tr, "text", None):
+                    said.append(tr.text)
+                turn = getattr(sc, "model_turn", None) if sc else None
+                for part in (getattr(turn, "parts", None) or []):
+                    blob = getattr(part, "inline_data", None)
+                    if blob is not None and isinstance(getattr(blob, "data", None), bytes):
+                        pcm.extend(blob.data)
+                if sc is not None and getattr(sc, "turn_complete", False):
+                    return
+
+        await asyncio.wait_for(drain(), timeout=timeout_s)
+        return bytes(pcm), "".join(said)
+    finally:
+        try:
+            await cm.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+
+def say_audio(text: str, voice: str = "", timeout_ms: int = 20_000,
+              key: str = "") -> Optional[bytes]:
+    """`text` spoken in the Live voice `voice`, as raw 24 kHz 16-bit mono PCM
+    (what main.py's speaker queue plays). None when there is no key, no free
+    Live slot, or no audio came back. Never raises."""
+    text = str(text or "").strip()
+    key = key or api_key()
+    if not text or not key:
+        return None
+    if not _LIVE_SLOTS.acquire(timeout=_LIVE_SLOT_WAIT):
+        return None
+    box: dict = {}
+
+    def runner():
+        try:
+            box["pcm"], box["said"] = asyncio.run(
+                _live_speech(text, voice, key, max(5.0, timeout_ms / 1000.0)))
+        except BaseException as e:                     # noqa: BLE001
+            box["error"] = e
+
+    try:
+        th = threading.Thread(target=runner, daemon=True, name="gemini-live-speech")
+        th.start()
+        th.join(timeout=timeout_ms / 1000.0 + 35.0)
+    finally:
+        _LIVE_SLOTS.release()
+    if "error" in box:
+        print(f"[Gemini] speech for a line failed: {box['error']}")
+        return None
+    pcm = box.get("pcm") or b""
+    if len(pcm) < 4800:                           # under 0.1 s is not a spoken line
+        return None
+    # It has to have said THIS line: a conversational model sometimes adds
+    # "Sure!" or answers the line instead of reading it.
+    said = str(box.get("said") or "")
+    if said and not same_words(said, text):
+        print(f"[Gemini] the voice said {said!r} instead of {text!r}; not kept")
+        return None
+    return pcm
+
+
+def same_words(a: str, b: str, threshold: float = 0.8) -> bool:
+    """Whether two short texts say the same words, ignoring case and
+    punctuation (a transcript never matches its script character for character)."""
+    import difflib
+    wa = re.findall(r"\w+", str(a).casefold())
+    wb = re.findall(r"\w+", str(b).casefold())
+    if not wa or not wb:
+        return False
+    return difflib.SequenceMatcher(None, wa, wb).ratio() >= threshold
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  The provider rung
 # ─────────────────────────────────────────────────────────────────────────────
 # Everything below is inert on an install that has not configured a provider:

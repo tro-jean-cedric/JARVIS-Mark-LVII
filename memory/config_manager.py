@@ -322,6 +322,28 @@ def save_tool_router_enabled(enabled: bool) -> None:
     _save_flag("tool_router", enabled)
 
 
+def get_on_it_enabled() -> bool:
+    """Whether a short recorded "on it" line is played when a tool runs for
+    more than a moment (core/on_it.py). On by default; Gemini Live only."""
+    return bool(load_api_keys().get("on_it_lines", True))
+
+
+def save_on_it_enabled(enabled: bool) -> None:
+    _save_flag("on_it_lines", enabled)
+
+
+def get_see_or_do_enabled() -> bool:
+    """Whether a quick check decides, before a screenshot, if one picture can
+    answer the user at all (core/see_or_do.py). OFF by default: measured, it
+    adds 1.2-1.9 s to every look at the screen, and the fast model it needs
+    was often refusing under load (it then stands aside and simply looks)."""
+    return bool(load_api_keys().get("see_or_do", False))
+
+
+def save_see_or_do_enabled(enabled: bool) -> None:
+    _save_flag("see_or_do", enabled)
+
+
 MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
 
 

@@ -786,6 +786,13 @@ class JarvisLive:
         # Features behind the "use_feature" tool this session (core/tool_router.py);
         # None while the router is off — set by _build_config.
         self._router_menu = None
+        # Recorded "on it" lines (core/on_it.py), made lazily per language;
+        # the user turn one was last played for; and whether the speakers are
+        # playing only such a line right now (cleared by the model's own audio).
+        self._on_it = None
+        self._on_it_lang = ""
+        self._on_it_turn = -1.0
+        self._on_it_live = False
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -1854,6 +1861,111 @@ class JarvisLive:
 
         return out
 
+    # ── "on it" lines (core/on_it.py) ─────────────────────────────────────────
+    # Tools that answer at once, or whose result IS what is said next.
+    _NO_ON_IT = frozenset({"save_memory", "recall_memory", "undo", "screen_process",
+                           "close_camera", "system_status", "manage_monitor",
+                           "shutdown_jarvis"})
+
+    def _arm_on_it(self, name: str):
+        """A timer that plays a recorded "on it" line if the tool is still
+        running after on_it.DELAY_S, or None. Prepares the lines for the
+        user's language in the background when they are not ready yet."""
+        # Never allowed to break a tool call: everything inside the guard, and
+        # nothing assumed about which attributes this instance already has.
+        try:
+            if name in self._NO_ON_IT or getattr(self, "_engine", None) is not None:
+                return None
+            from core import on_it
+            if not on_it.enabled():
+                return None
+            if getattr(self, "_on_it", None) is None:
+                self._on_it = on_it.Lines()
+            said = str(getattr(self, "_last_user_text", "")).removeprefix("(typed) ")
+            self._on_it_lang = on_it.language_of(said, getattr(self, "_on_it_lang", ""))
+            if not self._on_it_lang:
+                return None
+            voice = get_voice()
+            if not self._on_it.ready(self._on_it_lang, voice):
+                self._on_it.prepare_later(self._on_it_lang, voice)
+                return None
+            return asyncio.get_running_loop().call_later(on_it.DELAY_S, self._say_on_it)
+        except Exception as e:
+            print(f"[OnIt] {e}")
+            return None
+
+    def _say_on_it(self) -> None:
+        """Play one line now — once per user turn, never over speech."""
+        try:
+            q = self.audio_in_queue
+            if q is None or self._on_it is None or self._on_it_turn == self._last_user_input_at:
+                return
+            with self._speaking_lock:
+                if self._is_speaking:
+                    return
+            got = self._on_it.pick(self._on_it_lang, get_voice())
+            if not got:
+                return
+            text, pcm = got
+            self._on_it_turn = self._last_user_input_at
+            self._on_it_live = True
+            for i in range(0, len(pcm), 2400):
+                q.put_nowait(pcm[i:i + 2400])
+            print(f"[OnIt] said {text!r}")
+            # Speaking holds the microphone back. Our own line must not keep it
+            # held for the rest of a long tool: once it has played, and if the
+            # model has not started talking meanwhile, listen again.
+            seconds = len(pcm) / float(RECEIVE_SAMPLE_RATE * 2)
+            asyncio.get_running_loop().call_later(seconds + 0.4, self._on_it_done)
+        except Exception as e:
+            print(f"[OnIt] {e}")
+
+    # ── see or do (core/see_or_do.py) ──────────────────────────────────────────
+    _SEE_OR_DO_WAIT_S = 2.5     # never hold a screenshot longer than this for it (a healthy verdict: 1.2-1.9 s)
+
+    def _start_see_or_do(self, loop):
+        """Start judging the user's latest words on a worker thread; None when
+        there is nothing to judge (switched off, nothing said lately)."""
+        try:
+            from core import see_or_do
+            if not see_or_do.enabled() or time.monotonic() - self._last_user_input_at > 30:
+                return None
+            said = self._last_user_text.removeprefix("(typed) ")
+            if not said.strip():
+                return None
+            from core import tool_router
+            features = []
+            for d in self._tool_catalog():
+                n = d.get("name", "") if isinstance(d, dict) else ""
+                if n and n != "screen_process":
+                    features.append((n, tool_router.summary(d)))
+            return loop.run_in_executor(None, see_or_do.judge, said, features[:90])
+        except Exception as e:
+            print(f"[SeeOrDo] {e}")
+            return None
+
+    async def _finish_see_or_do(self, judging) -> str:
+        """The redirect to give the live model instead of a picture, or ''."""
+        if judging is None:
+            return ""
+        try:
+            verdict = await asyncio.wait_for(judging, timeout=self._SEE_OR_DO_WAIT_S)
+        except Exception:
+            print("[SeeOrDo] no verdict in time - looking")
+            return ""
+        if verdict.get("kind") != "do":
+            return ""
+        from core import see_or_do
+        menu = self._router_menu.features if self._router_menu is not None else {}
+        print(f"[SeeOrDo] not a picture: {verdict}")
+        return see_or_do.redirect(verdict, menu)
+
+    def _on_it_done(self) -> None:
+        q = self.audio_in_queue
+        if self._on_it_live and (q is None or q.empty()):
+            self._on_it_live = False
+            self.set_speaking(False)
+
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
@@ -1884,6 +1996,7 @@ class JarvisLive:
         # the model had called that feature itself. The answer still goes back
         # under the name the model called (`call_name`).
         call_name = name
+        _on_it_timer = self._arm_on_it(name)
         if name == "use_feature" and self._router_menu is not None:
             _menu = self._router_menu
             _convo = "\n".join(self._session_log[-6:])
@@ -1891,6 +2004,8 @@ class JarvisLive:
                 _menu.resolve, args.get("feature", ""), args.get("request", ""), _convo)
             if _answer is not None:
                 print(f"[Router] {args.get('feature')!r} not run: {_answer[:120]}")
+                if _on_it_timer is not None:
+                    _on_it_timer.cancel()
                 if not self.ui.muted:
                     self.ui.set_state("LISTENING")
                 return types.FunctionResponse(id=fc.id, name=call_name,
@@ -1956,6 +2071,10 @@ class JarvisLive:
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
                     else:
+                        # core/see_or_do.py: does one picture answer this at
+                        # all? Judged from the user's own words WHILE the
+                        # screen is captured, so a "yes" costs almost nothing.
+                        _judging = self._start_see_or_do(loop)
                         try:
                             img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
                         except Exception as e:
@@ -1965,18 +2084,24 @@ class JarvisLive:
                             raise RuntimeError(f"the screen could not be captured: {e}") from e
                         print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
                         _stall = "screen"
-                    self._pending_vision = (img_b, mime_t, user_text, angle)
-                    # The image is attached to this same exchange, so there is
-                    # nothing to stall for and nothing to announce. Asking for an
-                    # acknowledgement here is what produced two spoken answers —
-                    # the model filled that turn by answering the question from
-                    # imagination, then answered it again once it could see.
-                    result = (
-                        f"[VISION_ACTIVE] {_stall.capitalize()} captured and attached to this "
-                        f"same exchange. Do not acknowledge and do not answer yet — the image "
-                        f"is arriving with this result. Reply once, from what you actually see "
-                        f"in it."
-                    )
+                        _redirect = await self._finish_see_or_do(_judging)
+                        if _redirect:
+                            self._vision_busy = False
+                            img_b = None
+                            result = _redirect
+                    if img_b is not None:
+                        self._pending_vision = (img_b, mime_t, user_text, angle)
+                        # The image is attached to this same exchange, so there is
+                        # nothing to stall for and nothing to announce. Asking for an
+                        # acknowledgement here is what produced two spoken answers —
+                        # the model filled that turn by answering the question from
+                        # imagination, then answered it again once it could see.
+                        result = (
+                            f"[VISION_ACTIVE] {_stall.capitalize()} captured and attached to this "
+                            f"same exchange. Do not acknowledge and do not answer yet — the image "
+                            f"is arriving with this result. Reply once, from what you actually see "
+                            f"in it."
+                        )
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
@@ -2095,6 +2220,8 @@ class JarvisLive:
             traceback.print_exc()
             self.speak_error(name, e)
 
+        if _on_it_timer is not None:
+            _on_it_timer.cancel()
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
@@ -2374,6 +2501,7 @@ class JarvisLive:
                             # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
                             # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
                             _audio_data = response.data
+                            self._on_it_live = False   # the model is speaking now
                             _SLICE = 2400
                             for _i in range(0, len(_audio_data), _SLICE):
                                 self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])

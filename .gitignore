@@ -62,6 +62,8 @@ screenshots/
 
 # ── Plugin data (shopping list, flashcards, history...) ─────────────────────
 memory/plugin_data/
+# recorded "on it" lines in the user's own voice (core/on_it.py)
+memory/on_it/
 
 # ── Plugins the user added through the Plugin Manager (their own files) ─────
 user_plugins/
