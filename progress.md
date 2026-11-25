@@ -1,0 +1,155 @@
+# Torvis → JARVIS: progress
+
+What has been brought over from Torvis (v0.6.3), what is partly there, and what
+is left. Update this file in the same commit as every feature you add.
+To continue the work, use the prompt in [`TORVIS_PORT_PROMPT.md`](TORVIS_PORT_PROMPT.md).
+
+The detailed, per-feature notes (how each one was built, what it depends on)
+stay in [`TORVIS_PARITY.md`](TORVIS_PARITY.md). This file is the short list.
+
+**Ground rule — clean room.** Torvis is a commercial, closed product. Its
+behaviour (manual, help text, tool descriptions, module names) is a
+*specification only*. Nothing is copied: no code, prompts, user-facing text,
+models or assets. Write every string in your own words and check it with the
+wording check in `TORVIS_PORT_PROMPT.md`. Third-party models Torvis also ships
+(OpenCV zoo, MediaPipe, Silero) are fetched from their own upstream, under
+their own licences.
+
+Status: ✅ done · 🟡 partly done · ⬜ to do · ⛔ out of scope
+
+---
+
+## Done ✅
+
+### Added in the 2026-11-25 session (on `main`)
+
+| Feature | Where | Commit |
+|---|---|---|
+| Holo Desk, full version: own full-screen window, camera or overlay mode, ONNX two-hand tracking (no MediaPipe), 11 card types, every gesture (carry, fling, scroll, two-hand resize, pull nearer, clap/spread, card circle, dock, point = "this", wrist twist), mouse/wheel/Esc, sounds, saved layouts | `gui/holo_desk.py`, `plugins/holo_desk.py`, `plugins/_holo_desk_core.py`, `plugins/_holo_desk_content.py`, `plugins/_hands_onnx.py` | `40638dc` |
+| Holo Desk: last layout comes back, closes when the computer locks, shaded 3D model, hand skeleton + pinch / hold feedback, speed-aware smoothing, settings (sensitivity, start mode, remember, show hands, sounds) | same + `core/screen_lock.py` | `ffa0805` |
+| Open the program the user means (installed-apps list + model pick, never a look-alike) | `core/installed_apps.py`, `actions/open_app.py` | `33d405e` |
+| OpenAI-compatible voice: Kokoro locally, OpenAI, any `/v1/audio/speech` | `providers/tts_openai.py` | `a1a5536` |
+| Face Lock lock screen: cover on every screen, live camera + face boxes, "Unlock another way" PIN (5 tries, then 30 s) | `gui/lock_screen.py`, `plugins/_face_lock_core.py` | `08fe4e5` |
+| Face Lock: camera on the HUD while scanning or locked (when no PIN / cover off) | `plugins/face_lock.py` | merged `e862746` |
+| Screen-lock detection (macOS, Windows, Linux) | `core/screen_lock.py` | `ffa0805` |
+
+Also in that session, not from Torvis: Claude Code as a provider, coding agent
+and background agent (`core/claude_code.py`, `providers/llm_claude_code.py`,
+`caab17e`).
+
+### Done earlier (see `TORVIS_PARITY.md` for notes)
+
+Plugins: action_history · app_control · assistant_help · calendar_control ·
+calorie_counter · document_review · excel_writer · face_lock · fridge_chef ·
+gesture_control · gmail_control · holo_desk · home_assistant (Tuya) ·
+live_panels · obsidian_vault · paper_reminders · persona · pomodoro ·
+posture_guard · printer_control · pushup_counter · quiz · screen_agent ·
+shopping_list · spaced_repetition · subscription_radar · telegram_remote ·
+visual_panel · water_reminder · world_time.
+
+App-level: plugin manager with hash approval · active languages · moments
+(routines) · morning brief by voice · weekly recap · setup guides · shared
+webcam · camera chosen by name · phone confirm for risky steps.
+
+Already in JARVIS before the port: code_helper · dev_agent · flight_finder ·
+game_updater · open_app · browser_control · computer_control and the other
+built-in actions.
+
+---
+
+## Partly done 🟡 — what is missing
+
+| Feature | Missing |
+|---|---|
+| planet_watch | 3-D globe lit by the real Sun with zoom to street map; ISS pass predictions + spoken alerts (needs `sgp4`); ~17,000 live satellites (CelesTrak / SatNOGS); country cards (flag, capital, currency, local time); routes with distance and flight time; globe steered by hand (pinch to turn, two hands to zoom) |
+| shop_assistant | price tracking with alerts; choosing a product variant (size, colour) |
+| disk_map | the clickable treemap on the HUD (today: text report) |
+| build_guide | online datasheet lookup for parts |
+| connected_apps | OAuth sign-in for MCP servers (Notion, GitHub…): discovery, auto-registration, token refresh; a setup / reconnect panel |
+| video_summarizer | "the video on screen" without reading the address bar |
+| window_control | macOS move to another monitor; Linux Wayland |
+| cloud_agent | parity with Torvis's hosted "cloud body" where it makes sense self-hosted |
+| Remote Mode | sleep, then wake on a timer (`core.park`); switch the computer's smart plug (Tuya cloud, Shelly cloud, VoiceMonkey); automatic Wake-on-LAN setup on Windows (adapter settings, Fast Startup off); a settings panel |
+| Voice providers | Gemini as speech-to-text and as voice (user's own key); Silero voice-activity detection as an option (keep the energy detector as default) |
+| live_subtitles · whatsapp_call | built, but never tested against real audio loopback / real WhatsApp |
+
+---
+
+## To do ⬜ — ranked (value ÷ effort)
+
+Evidence = line numbers in the Torvis string dump used for the comparison
+(regenerate it as described in `TORVIS_PORT_PROMPT.md`).
+
+1. **Tool router** — rarely used plugins behind one "run a feature" tool;
+   a second model call fills that feature's real arguments; switched-off
+   features stay listed with how to switch them on. Cuts what Gemini Live is
+   sent on every turn. *Medium.* Evidence: `core.tool_budget`, `core.tool_args`
+   (~3298422–3298840). Touches `main.py` tool assembly — read
+   `.claude/docs/architectural_patterns.md` first.
+2. **Screen-agent eyes** — before each step, mark clickable things with
+   numbers, wait until the screen stops changing, spot loading / busy areas.
+   *Medium*, opencv + pillow. Evidence: `plugins._screen_eyes`
+   (~3795549–3796358). Target: `plugins/_screen_loop.py`.
+3. **App controls without the mouse** — press, toggle, set text / number /
+   choice through accessibility (pywinauto UIA on Windows, AX on macOS,
+   AT-SPI on Linux); works on background windows; refuses password fields.
+   *Medium.* Evidence: `core.uiact` (~3298901–3299388). Target:
+   `core/screenact.py`.
+4. **Instant "on it" lines + see-or-do check** — three short spoken
+   acknowledgements per language, generated once and cached, said while a slow
+   job runs; before a screenshot, decide whether the request needs seeing or
+   doing and route things a still picture cannot answer elsewhere. *Small.*
+   Evidence: ~3194539, ~3194626.
+5. **Capability self-test** — one command / voice request that checks
+   languages, TLS, Playwright, yt-dlp, speaker capture, VAD and wake-word
+   models and says what is missing. *Small–medium.* Evidence: `core.selftest`
+   (~3293045–3293461). Extends `assistant_help`'s diagnose.
+6. **Numbers said as words for local voices** — numbers, dates, times,
+   ranges, money, units, phone numbers and sums spelled out in the user's
+   language before Piper / system voices read them; cache short replies.
+   *Medium*, needs `babel` (new dependency — ask first). Evidence:
+   `providers._numbers`, `_speakable` (~3857518–3858394). Target:
+   `providers/engine_pipeline.py` `_speakable`.
+7. **Desktop notifications** — `notify-send` / macOS / Windows toast for
+   finished tasks and reminders. *Small.* Evidence: `core.notify`.
+8. **Brave Search with the user's own key** — an extra web-search source.
+   *Small.* Evidence: `core.brave` (~3265044).
+9. **Plugin sandbox** — user-added plugins run in a separate host process with
+   an allow-list of libraries. *Medium.* Evidence: `core.script_host`
+   (~3292662–3292892). Target: `core/plugin_loader.py`.
+10. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+    providers, connected_apps OAuth, planet_watch (large — split it), the rest.
+
+---
+
+## Out of scope ⛔
+
+Torvis's commercial service and packaging: account, credits / allowance,
+licence and trial, edition, signed updater, relay, hosted "cloud memory",
+footprint eraser, installers, telemetry, "report a problem" to its developer,
+the 10-language interface translations.
+
+---
+
+## Needs a person to verify
+
+Things built and tested in code but never tried for real:
+- Holo Desk with a real webcam and live hands (gesture thresholds may need tuning)
+- Holo Desk closing on a real screen lock; overlay transparency; sounds
+- Face Lock lock screen with a real face, on more than one monitor, and how
+  macOS treats it keeping focus
+- OpenAI-compatible voice against a real Kokoro / OpenAI server
+- open_app's resolver on Windows and Linux, and with the Gemini key
+- the items listed under "Not verified on real hardware/accounts" in
+  `TORVIS_PARITY.md`
+
+---
+
+## Log
+
+- 2026-11-25 — Holo Desk full port + improvements; installed-apps resolver;
+  OpenAI-compatible voice; Face Lock lock screen; HUD camera for Face Lock.
+  User-facing wording that had been taken from Torvis rewritten in our own
+  words (wording check: 0 overlaps). This file and the continuation prompt
+  created.
+- 2026-11-24 — First port waves (see `TORVIS_PARITY.md` log).

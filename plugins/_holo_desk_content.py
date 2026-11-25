@@ -80,7 +80,8 @@ def _memory_city() -> str:
 def _weather(panel, desk) -> None:
     city = (panel.arg or "").strip() or _memory_city()
     if not city:
-        _set(desk, panel, status='Say which city: "show the weather in Paris on the holo desk"')
+        _set(desk, panel, status='No place known yet - ask e.g. "put the weather for Lisbon on '
+                                 'the desk".')
         return
     from plugins.live_panels import _WMO, _weather as fetch
     data, err = fetch(city)
@@ -138,8 +139,8 @@ def _notes(panel, desk) -> None:
     except Exception as e:
         vault, why = None, str(e)
     if vault is None:
-        _set(desk, panel, status="Connect your Obsidian vault in Obsidian's plugin settings "
-                                 "to see your notes here.")
+        _set(desk, panel, status="No Obsidian vault found - set its folder in the Obsidian "
+                                 "plugin's settings.")
         return
     found = []
     for p in ov._iter_notes(vault, limit=20_000):
@@ -184,7 +185,8 @@ def _routines(panel, desk) -> None:
             items.append((ts, (r.get("text") or r.get("name") or "")[:120]))
     items.sort()
     if not items:
-        _set(desk, panel, rows=[], status='Nothing scheduled. Say: "remind me at 6 to call mom".')
+        _set(desk, panel, rows=[], status='Nothing coming up. Try "remind me at 7 to water the '
+                                          'plants".')
         return
     today = datetime.now().date()
     rows = []
@@ -222,7 +224,7 @@ def _model(panel, desk) -> None:
 def _video(panel, desk) -> None:
     src = (panel.arg or "").strip()
     if not src:
-        _set(desk, panel, status="A video panel needs a file or a link.")
+        _set(desk, panel, status="A video card needs a file path or a web link.")
         return
     low = src.lower()
     if low.startswith(("http://", "https://")):

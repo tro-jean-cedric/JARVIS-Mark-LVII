@@ -141,7 +141,7 @@ def test_two_hand_resize():
 
 
 def test_pull_nearer():
-    print("\n[7] pull a held panel towards you")
+    print("\n[7] a held card brought nearer grows")
     clk, desk, inp = setup()
     p = desk.add("text", text="x")
     w0 = p.w

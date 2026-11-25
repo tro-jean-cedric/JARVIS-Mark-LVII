@@ -1,5 +1,5 @@
-"""gui/holo_desk.py — the Holo Desk: the camera picture fills the screen and
-glass panels float in it, moved by the user's hands.
+"""gui/holo_desk.py — the Holo Desk: a full-screen webcam view with floating
+cards that the user's hands pick up and move.
 
 Qt main thread only. Built and driven by MainWindow (`_holo_sig`), which the
 voice tool reaches through `JarvisUI.holo_desk(cmd, **kw)`; nothing outside
@@ -228,7 +228,8 @@ class HoloDeskWindow(QWidget):
         self.effects: list = []                        # (kind, x, y, t0, colour)
         self.status = "Starting the camera..."
         self.hint_until = time.monotonic() + 9
-        self.hint = "Raise your hand - pinch a panel to move it, pinch a button to open one"
+        self.hint = ("Show a hand to the camera - pinch a top bar to carry a card, or a button "
+                     "below for a new one")
         self.camera_error = ""
         self._images: dict = {}                        # pid -> (arg, QImage | None)
         self._videos: dict = {}                        # pid -> _Video

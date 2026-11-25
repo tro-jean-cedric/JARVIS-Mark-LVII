@@ -59,7 +59,7 @@ class LockScreen(QWidget):
         self.other.setCursor(Qt.CursorShape.PointingHandCursor)
         self.other.setFont(hud_font(10))
         self.other.setStyleSheet(
-            f"QPushButton {{ color: {C.TEXT_MED}; background: transparent; border: none; "
+            f"QPushButton {{ border: none; background: transparent; color: {C.TEXT_MED}; "
             f"text-decoration: underline; }} QPushButton:hover {{ color: {C.PRI}; }}")
         self.other.clicked.connect(self._open_key)
         self.pin = QLineEdit(self)
@@ -69,14 +69,14 @@ class LockScreen(QWidget):
         self.pin.setFont(hud_font(13))
         self.pin.setStyleSheet(
             f"QLineEdit {{ background: {C.DARK}; color: {C.WHITE}; border: 1px solid {C.BORDER_B}; "
-            f"border-radius: 3px; padding: 6px; }} QLineEdit:focus {{ border-color: {C.PRI}; }}")
+            f"border-radius: 4px; padding: 6px 8px; }} QLineEdit:focus {{ border-color: {C.PRI}; }}")
         self.pin.returnPressed.connect(self._try_key)
         self.go = QPushButton("UNLOCK", self)
         self.go.setCursor(Qt.CursorShape.PointingHandCursor)
         self.go.setFont(hud_font(10, QFont.Weight.Bold))
         self.go.setStyleSheet(
             f"QPushButton {{ background: {C.PRI_GHO}; color: {C.PRI}; border: 1px solid {C.PRI}; "
-            f"border-radius: 3px; padding: 0 14px; }} QPushButton:hover {{ color: {C.WHITE}; }}")
+            f"border-radius: 4px; padding: 0 16px; }} QPushButton:hover {{ color: {C.WHITE}; }}")
         self.go.clicked.connect(self._try_key)
         self.note = QLabel(self)
         self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)

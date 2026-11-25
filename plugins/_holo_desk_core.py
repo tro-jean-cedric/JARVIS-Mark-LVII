@@ -17,8 +17,8 @@ THE GESTURES (what the guide panel and the 'help' action describe)
   pinch inside a list ...... scroll it up and down
   both hands on one panel .. pull apart / together to resize it
   pull a held panel nearer . it grows (the hand gets bigger in the picture)
-  clap two open hands ...... every panel is put away; pull them apart to
-                             bring them back
+  clap two open hands ...... every card is hidden; spread them again to
+                             show it all
   pinch and hold on space .. a ring of new panels opens round the hand
   quick pinch .............. presses buttons: the dock, a headline, a note
   point at a panel ......... it becomes "this" for "close this", "read this"
@@ -55,17 +55,17 @@ DOCK_Y = 0.915            # the dock's centre line
 DOCK_R = 0.032            # a dock button's radius (in screen-height units)
 
 GUIDE = [
-    "Pinch a panel's title bar to pick it up, open your fingers to let go",
-    "Let go while moving to throw it - off the screen, it closes",
-    "Pinch inside a list and move up or down to scroll",
-    "Pinch one panel with both hands, pull apart or together to resize",
-    "Pull a held panel towards you to make it bigger",
-    "Clap both open hands together fast to put everything away; pull them apart to bring it back",
-    "Pinch and hold on empty space: a ring of panels opens around your hand",
-    "A quick pinch presses buttons, headlines and notes",
-    "Point at a panel and say \"close this\", \"read this\" or \"make this bigger\"",
-    "Turn your hand while holding the 3D model to rotate it",
-    "Mouse: drag a title bar, wheel to resize, Esc to close the desk",
+    "Carry a card: pinch its top bar, then open your fingers to drop it",
+    "Release while still moving to fling it; flung off the screen, it is dismissed",
+    "In a list, pinch and drag up or down to scroll",
+    "Resize: pinch the same card with both hands and spread or close them",
+    "Bring a held card closer to the camera to enlarge it",
+    "Hide everything: bring two open hands together quickly; spread them again to show it all",
+    "New card: keep a pinch still on empty space until a circle of choices appears",
+    "Tap with a short pinch to press buttons, headlines and notes",
+    "Aim your index finger at a card, then say 'read this', 'close this' or 'make this bigger'",
+    "Holding the 3D model, twist your wrist to spin it",
+    "With a mouse: drag a top bar, roll the wheel to resize, Esc closes the desk",
 ]
 
 

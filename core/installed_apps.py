@@ -152,14 +152,15 @@ def list_apps(refresh: bool = False) -> list:
 
 # ── resolving ────────────────────────────────────────────────────────────────
 _ASK = (
-    "The user asked this computer to open a program. They said: {spoken!r}\n\n"
-    "Which program on this computer's list do they mean? The name may be in any "
-    "language, a translation, a nickname or a description of what the program does. "
-    "Answer with the program's name EXACTLY as written in the list, or with an empty "
-    "string when nothing on the list is what they mean. Never a similar but different "
-    "program: if they asked for one that is not installed, answer empty.\n\n"
-    'Reply with JSON only: {{"app": "<name from the list or empty>"}}\n\n'
-    "Programs on this computer:\n{names}"
+    "Someone wants to start a program on this computer and said: {spoken!r}\n\n"
+    "Below is the list of programs installed on this computer. Decide which single "
+    "entry they are referring to. They may have used another language, a translated or "
+    "informal name, or described what the program is for. Reply with the entry copied "
+    "exactly from the list. If none of the entries is what they asked for - including "
+    "when they named a program that simply is not installed - reply with an empty "
+    "string; do not substitute a look-alike.\n\n"
+    'JSON only: {{"app": "<entry from the list, or empty>"}}\n\n'
+    "Installed programs:\n{names}"
 )
 
 
@@ -195,7 +196,7 @@ def resolve(spoken: str, apps: Optional[list] = None, ask=None) -> Optional[App]
     try:
         reply = ask(_ASK.format(spoken=spoken, names=names))
     except Exception as e:
-        print(f"[installed_apps] the model could not be asked: {e}")
+        print(f"[installed_apps] model lookup failed: {e}")
         return None
     chosen = str((reply or {}).get("app") or "").strip() if isinstance(reply, dict) else ""
     if not chosen:
