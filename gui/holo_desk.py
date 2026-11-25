@@ -47,6 +47,29 @@ _GLYPH = {"clock": "◷", "system": "▤", "weather": "☁", "news": "◈", "not
 _BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _truthy(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _settings() -> dict:
+    """The Holo Desk's settings (plugins/holo_desk.py PLUGIN_SETTINGS)."""
+    out = {"sensitivity": "normal", "sounds": True, "skeleton": True, "remember": True}
+    try:
+        from memory.config_manager import get_plugin_config
+        cfg = get_plugin_config("holo_desk") or {}
+        s = str(cfg.get("pinch_sensitivity") or "normal").lower()
+        out["sensitivity"] = s if s in ("gentle", "normal", "firm") else "normal"
+        for key, name in (("sounds", "sounds"), ("skeleton", "show_hands"),
+                          ("remember", "remember_layout")):
+            if name in cfg:
+                out[key] = _truthy(cfg[name])
+    except Exception:
+        pass
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Small sounds, made once
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,9 +130,10 @@ class _Sounds:
 #  3D model: a wireframe from an .obj
 # ─────────────────────────────────────────────────────────────────────────────
 def load_obj(path: str, max_edges: int = 4000) -> tuple:
-    """(vertices normalised to a unit box, edges). Faces become edges; a big
-    model keeps every n-th edge so it still draws at 60 fps."""
-    verts, edges = [], set()
+    """(vertices normalised to a unit box, edges, triangles). Polygons are
+    fanned into triangles; a big model keeps every n-th edge and triangle so
+    it still draws at 60 fps."""
+    verts, edges, tris = [], set(), []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.startswith("v "):
@@ -120,6 +144,8 @@ def load_obj(path: str, max_edges: int = 4000) -> tuple:
                 idx = [i - 1 if i > 0 else len(verts) + i for i in idx]
                 for a, b in zip(idx, idx[1:] + idx[:1]):
                     edges.add((min(a, b), max(a, b)))
+                for k in range(1, len(idx) - 1):
+                    tris.append((idx[0], idx[k], idx[k + 1]))
     if not verts:
         raise ValueError("the file holds no vertices")
     xs, ys, zs = zip(*verts)
@@ -130,7 +156,11 @@ def load_obj(path: str, max_edges: int = 4000) -> tuple:
     if len(edges) > max_edges:
         step = len(edges) / max_edges
         edges = [edges[int(i * step)] for i in range(max_edges)]
-    return verts, edges
+    max_tris = max_edges
+    if len(tris) > max_tris:
+        step = len(tris) / max_tris
+        tris = [tris[int(i * step)] for i in range(max_tris)]
+    return verts, edges, tris
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,7 +215,8 @@ class HoloDeskWindow(QWidget):
         self.core = core
         self.desk = desk
         self.inp = core.Input(desk)
-        self.filter = core.HandFilter()
+        self.settings = _settings()
+        self.filter = core.HandFilter(self.settings["sensitivity"])
         self.on_close = on_close
         self.log = log or (lambda s: None)
         self.mode = "camera"
@@ -205,7 +236,7 @@ class HoloDeskWindow(QWidget):
         self._stop = threading.Event()
         self._last = time.monotonic()
         self._closing = False
-        self.sounds = _Sounds()
+        self.sounds = _Sounds() if self.settings["sounds"] else None
 
         self.setWindowTitle("Holo Desk")
         self.setMouseTracking(True)
@@ -228,6 +259,7 @@ class HoloDeskWindow(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(int(1000 / FPS))
+        threading.Thread(target=self._lock_loop, daemon=True, name="holo-lock").start()
         self._worker = threading.Thread(target=self._camera_loop, daemon=True, name="holo-desk")
         self._worker.start()
         core.STATE.update(open=True, mode=self.mode, camera="", since=time.time())
@@ -316,7 +348,25 @@ class HoloDeskWindow(QWidget):
             except Exception:
                 pass
 
+    def _lock_loop(self) -> None:
+        """Close the desk when the computer is locked: a full-screen camera
+        picture must not stay up behind the lock screen. Polled here, off the
+        Qt thread, because on Linux the check runs loginctl."""
+        from core.screen_lock import is_locked
+        while not self._stop.wait(2.0):
+            if is_locked():
+                try:
+                    self._status_sig.emit("locked")
+                except RuntimeError:
+                    pass
+                return
+
     def _on_status(self, text: str) -> None:
+        if text == "locked":
+            print("[HoloDesk] the computer was locked: closing")
+            self.log("Holo Desk closed: the computer was locked.")
+            self.request_close()
+            return
         if text.startswith("camera:"):
             self.camera_error = text[7:]
             self.core.STATE["camera"] = self.camera_error
@@ -345,13 +395,16 @@ class HoloDeskWindow(QWidget):
         return s, (W - fw * s) / 2, (H - fh * s) / 2, fw, fh
 
     def _to_screen(self, x: float, y: float) -> tuple:
-        """A hand's place in the picture -> 0..1 of the screen. A little
-        stretched round the centre, so the corners can be reached without
-        leaving the camera's view."""
+        """A hand's place in the picture -> 0..1 of the screen.
+
+        Camera mode: exactly where the hand is in the picture behind, so the
+        cursor sits on the fingers. Overlay mode shows no picture, so there
+        nothing has to line up and the map is stretched round the centre:
+        the corners are reachable without leaving the camera's view."""
         s, ox, oy, fw, fh = self._cover()
         W, H = max(1, self.width()), max(1, self.height())
         sx, sy = (x * fw * s + ox) / W, (y * fh * s + oy) / H
-        reach = 1.18
+        reach = 1.0 if self.mode == "camera" else 1.2
         return 0.5 + (sx - 0.5) * reach, 0.5 + (sy - 0.5) * reach
 
     # ── the frame tick (Qt thread) ───────────────────────────────────────────
@@ -371,7 +424,8 @@ class HoloDeskWindow(QWidget):
 
     def _event(self, ev, now: float) -> None:
         kind = ev[0]
-        self.sounds.play(kind)
+        if self.sounds is not None:
+            self.sounds.play(kind)
         if kind in ("tap", "ring"):
             self.effects.append(("ripple", ev[1], ev[2], now, C.PRI))
         elif kind in ("closed", "throw", "grab", "added", "focus"):
@@ -458,27 +512,32 @@ class HoloDeskWindow(QWidget):
         else:
             self.shutdown()
 
-    def shutdown(self) -> None:
-        if self._closing:
-            return
+    def _teardown(self) -> None:
+        """Stop everything once; keep the layout for next time first, so it is
+        saved before anyone is told the desk is closed."""
         self._closing = True
         self._stop.set()
         self._timer.stop()
         for v in self._videos.values():
             v.stop.set()
         self._videos.clear()
+        with self.desk.lock:
+            for p in self.desk.panels:
+                p.held = False
+        if self.settings.get("remember"):
+            self.core.save_last(self.desk)
         self.core.STATE.update(open=False, camera="")
+
+    def shutdown(self) -> None:
+        if self._closing:
+            return
+        self._teardown()
         self.close()
         self.deleteLater()
 
     def closeEvent(self, e):
         if not self._closing:
-            self._closing = True
-            self._stop.set()
-            self._timer.stop()
-            for v in self._videos.values():
-                v.stop.set()
-            self.core.STATE.update(open=False, camera="")
+            self._teardown()
             if callable(self.on_close):
                 self.on_close(already_closed=True)
         super().closeEvent(e)
@@ -593,9 +652,22 @@ class HoloDeskWindow(QWidget):
         p.restore()
 
     # ── panel bodies ─────────────────────────────────────────────────────────
-    def _text(self, p, rect, text, size, colour=None, align=None, bold=False) -> None:
+    def _text(self, p, rect, text, size, colour=None, align=None, bold=False,
+              fit: bool = False) -> None:
+        """Text in a rect, word-wrapped. With fit, the size shrinks until the
+        widest line fits on one line — for big figures (a clock, a temperature)
+        that must not wrap or be cut."""
+        weight = QFont.Weight.Bold if bold else None
+        font = hud_font(size, weight)
+        if fit and text:
+            widest = max(text.split("\n"), key=len)
+            while size > 7:
+                font = hud_font(size, weight)
+                if QFontMetricsF(font).horizontalAdvance(widest) <= rect.width() - 2:
+                    break
+                size *= 0.92
         p.setPen(QColor(colour or C.TEXT))
-        p.setFont(hud_font(size, QFont.Weight.Bold if bold else None))
+        p.setFont(font)
         p.drawText(rect, int(align or (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop))
                    | int(Qt.TextFlag.TextWordWrap), text)
 
@@ -607,8 +679,8 @@ class HoloDeskWindow(QWidget):
             return
         if k == "clock":
             self._text(p, QRectF(b.left(), b.top(), b.width(), b.height() * 0.62),
-                       time.strftime("%H:%M:%S"), min(b.height() * 0.30, b.width() * 0.11),
-                       C.WHITE, Qt.AlignmentFlag.AlignCenter, bold=True)
+                       time.strftime("%H:%M:%S"), b.height() * 0.30,
+                       C.WHITE, Qt.AlignmentFlag.AlignCenter, bold=True, fit=True)
             self._text(p, QRectF(b.left(), b.top() + b.height() * 0.62, b.width(), b.height() * 0.38),
                        time.strftime("%A %d %B %Y"), unit * 0.9, C.TEXT_MED,
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
@@ -631,7 +703,7 @@ class HoloDeskWindow(QWidget):
         if k == "weather" and panel.text:
             lines = panel.text.split("\n")
             self._text(p, QRectF(b.left(), b.top(), b.width(), b.height() * 0.42), lines[0],
-                       min(b.height() * 0.16, b.width() * 0.09), C.WHITE, bold=True)
+                       b.height() * 0.16, C.WHITE, bold=True, fit=True)
             self._text(p, QRectF(b.left(), b.top() + b.height() * 0.42, b.width(), b.height() * 0.58),
                        "\n".join(lines[1:]), unit * 0.85, C.TEXT_MED)
             return
@@ -736,12 +808,12 @@ class HoloDeskWindow(QWidget):
         cached = self._models.get(panel.pid)
         if cached is None or cached[0] != arg:
             try:
-                verts, edges = load_obj(arg)
-                cached = (arg, verts, edges, "")
+                verts, edges, tris = load_obj(arg)
+                cached = (arg, verts, edges, tris, "")
             except Exception as e:
-                cached = (arg, [], [], f"The model could not be opened: {e}")
+                cached = (arg, [], [], [], f"The model could not be opened: {e}")
             self._models[panel.pid] = cached
-        _, verts, edges, err = cached
+        _, verts, edges, tris, err = cached
         if err:
             self._text(p, b, err, unit * 0.9, C.RED)
             return
@@ -751,23 +823,52 @@ class HoloDeskWindow(QWidget):
         cp, sp = math.cos(panel.pitch), math.sin(panel.pitch)
         size = min(b.width(), b.height()) * 0.9
         cx, cy = b.center().x(), b.center().y()
-        pts = []
+        pts, rot = [], []
         for x, y, z in verts:
             x1 = x * cy_ + z * sy_
             z1 = -x * sy_ + z * cy_
             y1 = y * cp - z1 * sp
             z2 = y * sp + z1 * cp
             persp = 1.0 / (1.6 - z2)
-            pts.append((cx + x1 * size * persp, cy - y1 * size * persp, z2))
-        near, far = [], []
+            pts.append((cx + x1 * size * persp, cy - y1 * size * persp))
+            rot.append((x1, y1, z2))
+        # Shaded surface: triangles far to near (painter's algorithm), lit from
+        # the upper left. Lit on whichever side faces the light, so a model
+        # wound either way shades the same.
+        lx, ly, lz = 0.37, 0.46, 0.81
+        order = []
+        for t in tris:
+            a, b2, c = rot[t[0]], rot[t[1]], rot[t[2]]
+            ux, uy, uz = b2[0] - a[0], b2[1] - a[1], b2[2] - a[2]
+            vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+            nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+            ln = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            if nz < 0:
+                nx, ny, nz = -nx, -ny, -nz
+            shade = max(0.0, (nx * lx + ny * ly + nz * lz) / ln)
+            order.append((a[2] + b2[2] + c[2], t, shade))
+        order.sort(key=lambda o: o[0])
+        if order:
+            base = QColor(C.PRI)
+            brushes = {}
+            for _z, t, shade in order:
+                level = int(shade * 15)
+                br = brushes.get(level)
+                if br is None:
+                    k = 0.12 + 0.78 * level / 15
+                    col = QColor(int(base.red() * k), int(base.green() * k),
+                                 int(base.blue() * k), 235)
+                    br = brushes[level] = (col, QPen(col, 0.7))
+                p.setBrush(br[0])
+                p.setPen(br[1])
+                p.drawPolygon(QPolygonF([QPointF(*pts[t[0]]), QPointF(*pts[t[1]]),
+                                         QPointF(*pts[t[2]])]))
+        near = []
         for a, c in edges:
-            pa, pc = pts[a], pts[c]
-            side = near if pa[2] + pc[2] > 0 else far      # front edges drawn brighter
-            side.append(QPointF(pa[0], pa[1]))
-            side.append(QPointF(pc[0], pc[1]))
-        p.setPen(QPen(with_alpha(C.PRI, 0.25), 1))
-        p.drawLines(far)
-        p.setPen(QPen(with_alpha(C.PRI, 0.85), 1.1))
+            if rot[a][2] + rot[c][2] > 0:                  # front edges: the hologram's glint
+                near.append(QPointF(*pts[a]))
+                near.append(QPointF(*pts[c]))
+        p.setPen(QPen(with_alpha(C.WHITE, 0.18 if order else 0.85), 0.8))
         p.drawLines(near)
 
     # ── the dock, the ring, cursors, effects, status ─────────────────────────
@@ -830,20 +931,44 @@ class HoloDeskWindow(QWidget):
             if on:
                 self._label(p, q.x(), q.y() - br - 16, self.core.LABELS.get(kind, kind))
 
+    _BONES = ((0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10),
+              (10, 11), (11, 12), (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (17, 18),
+              (18, 19), (19, 20), (0, 17))
+
     def _paint_cursors(self, p: QPainter) -> None:
         W, H = self.width(), self.height()
+        now = time.monotonic()
+        # Holding still on empty space: an arc fills until the ring opens.
+        for x, y, frac in self.inp.hold_progress(now):
+            rect = QRectF(x * W - 28, y * H - 28, 56, 56)
+            p.setPen(QPen(with_alpha(C.PRI, 0.25), 4))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(rect)
+            p.setPen(QPen(QColor(C.PRI), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawArc(rect, 90 * 16, int(-360 * 16 * frac))
         for ptr in self.pointers:
             if ptr.pid == "mouse":
                 continue
+            if self.settings.get("skeleton") and ptr.pts:
+                lines = [QPointF(ptr.pts[a][0] * W, ptr.pts[a][1] * H) for bone in self._BONES
+                         for a in bone]
+                p.setPen(QPen(with_alpha(C.PRI, 0.32), 2))
+                p.drawLines(lines)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(with_alpha(C.WHITE, 0.45))
+                for i in (4, 8, 12, 16, 20):
+                    p.drawEllipse(QPointF(ptr.pts[i][0] * W, ptr.pts[i][1] * H), 3, 3)
             c = QPointF(ptr.x * W, ptr.y * H)
             r = 16.0
             col = QColor(C.ACC2 if ptr.down else C.PRI)
             p.setPen(QPen(with_alpha(col, 0.35), 6))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(c, r, r)
+            # The inner ring closes in as the fingers do; full and filled = pinched.
+            inner = r * (1.0 - 0.45 * max(0.0, min(1.0, ptr.pinch)))
             p.setPen(QPen(col, 2))
             p.setBrush(with_alpha(col, 0.55) if ptr.down else Qt.BrushStyle.NoBrush)
-            p.drawEllipse(c, r * (0.55 if ptr.down else 1.0), r * (0.55 if ptr.down else 1.0))
+            p.drawEllipse(c, inner, inner)
             if ptr.pointing:
                 p.setPen(QPen(col, 1.5))
                 p.drawLine(QPointF(c.x() - r * 1.6, c.y()), QPointF(c.x() + r * 1.6, c.y()))

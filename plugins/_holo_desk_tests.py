@@ -260,6 +260,76 @@ class FakeHand:
         self.pointing = False
 
 
+def test_sensitivity_and_smoothing():
+    print("\n[16] pinch sensitivity, speed-aware smoothing, pinch feedback")
+    from plugins._holo_desk_core import HandFilter
+    ident = lambda x, y: (x, y)
+    loose = 0.37                         # a loose pinch: counts only when 'gentle'
+    got = {}
+    for sens in ("gentle", "normal", "firm"):
+        f = HandFilter(sens)
+        got[sens] = f.update([FakeHand(0.5, 0.5, loose)], ident, 0.0)[0].down
+    check("a loose pinch counts as gentle only", got == {"gentle": True, "normal": False,
+                                                         "firm": False}, got)
+    # Still hand with jitter: the cursor moves much less than the jitter.
+    f = HandFilter()
+    t = 0.0
+    f.update([FakeHand(0.5, 0.5, 1.0)], ident, t)
+    xs = []
+    for i in range(20):
+        t += 1 / 30
+        xs.append(f.update([FakeHand(0.5 + (0.004 if i % 2 else -0.004), 0.5, 1.0)], ident, t)[0].x)
+    spread = max(xs[5:]) - min(xs[5:])
+    check(f"still-hand jitter damped ({spread:.4f} of 0.008)", spread < 0.004, spread)
+    # A fast sweep: the cursor stays close behind the hand.
+    for i in range(10):
+        t += 1 / 30
+        p = f.update([FakeHand(0.5 + 0.06 * (i + 1), 0.5, 1.0)], ident, t)[0]
+    check(f"fast hand followed closely (lag {0.5 + 0.6 - p.x:.3f})", 0.5 + 0.6 - p.x < 0.03,
+          p.x)
+    f = HandFilter()
+    vals = [f.update([FakeHand(0.5, 0.5, r)], ident, 0.1 * i)[0].pinch
+            for i, r in enumerate((1.0, 0.8, 0.6, 0.45, 0.30))]
+    check("pinch closeness rises to 1 as fingers close",
+          vals == sorted(vals) and vals[-1] == 1.0 and vals[0] == 0.0, vals)
+
+
+def test_hold_progress_and_last_layout():
+    print("\n[17] ring hold progress; the last layout comes back")
+    clk, desk, inp = setup()
+    run(inp, clk, [[hand(0.5, 0.6, True)]] * 12)
+    prog = inp.hold_progress(clk.t)
+    check("hold progress grows towards 1", prog and 0.4 < prog[0][2] < 0.8, prog)
+    import tempfile
+    from pathlib import Path
+    from plugins import _announce, _holo_desk_core as core
+    store = {}
+    saved_load, saved_save = _announce.load, _announce.save
+    _announce.load = lambda name, default=None: store.get(name, default)
+    _announce.save = lambda name, data: store.__setitem__(name, data)
+    try:
+        d1 = Desk(clock=clk)
+        d1.add("weather", arg="Oslo")
+        d1.add("text", title="Todo", text="x")
+        d1.add("clock")
+        d1.clear()
+        d1.add("system")
+        store["holo_desk"] = {"desks": {"keep": []}}
+        check("saved", core.save_last(d1) == "")
+        d2 = Desk(clock=clk)
+        n = core.load_last(d2)
+        check("4 panels back: 1 shown, 3 put away (clap them back)",
+              n == 4 and [p.kind for p in d2.live()] == ["system"] and len(d2.hidden) == 3,
+              (n, [p.kind for p in d2.live()], len(d2.hidden)))
+        check("restore brings back the put-away ones with their settings",
+              d2.restore() == 3 and any(p.arg == "Oslo" for p in d2.live()))
+        check("named desks are kept", "keep" in store["holo_desk"]["desks"])
+        ids = [p.pid for p in d2.live()]
+        check("panel ids stay unique", len(ids) == len(set(ids)), ids)
+    finally:
+        _announce.load, _announce.save = saved_load, saved_save
+
+
 def test_hand_filter():
     print("\n[15] hands to pointers: stable slots, pinch hysteresis, dropouts")
     from plugins._holo_desk_core import HandFilter
@@ -293,7 +363,8 @@ def main() -> int:
     for fn in (test_carry_and_drop, test_throw_closes, test_short_throw_stays, test_scroll_list,
                test_tap_row, test_two_hand_resize, test_pull_nearer, test_clap_and_spread,
                test_ring, test_dock, test_point_focus_and_close_button, test_rotate_model,
-               test_mouse_and_lost_hand, test_save_load, test_hand_filter):
+               test_mouse_and_lost_hand, test_save_load, test_hand_filter,
+               test_sensitivity_and_smoothing, test_hold_progress_and_last_layout):
         try:
             fn()
         except Exception as e:
