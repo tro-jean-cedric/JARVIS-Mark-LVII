@@ -1074,6 +1074,130 @@ def test_panel_settings_survive():
             cfg_file.unlink(missing_ok=True)
 
 
+_FAKE_CLAUDE = r'''#!{python}
+# A stand-in for the `claude` command: reads one stream-json message and
+# answers the way Claude Code 2.1 does. The first word of the request picks
+# the behaviour.
+import json, sys, time
+args = sys.argv[1:]
+msg = json.loads(sys.stdin.readline())
+parts = msg["message"]["content"]
+text = parts[0]["text"]
+images = sum(1 for p in parts if p.get("type") == "image")
+def out(ev): print(json.dumps(ev), flush=True)
+out({"type": "system", "subtype": "init", "session_id": "sess-1"})
+if text.startswith("LIMIT"):
+    out({"type": "result", "is_error": True, "api_error_status": 429,
+         "result": "Claude usage limit reached", "session_id": "sess-1"})
+    sys.exit(1)
+if text.startswith("HANG"):
+    time.sleep(60)
+if text.startswith("CRASH"):
+    print("boom", file=sys.stderr); sys.exit(3)
+if text.startswith("AGENT"):
+    out({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Looking."},
+        {"type": "tool_use", "name": "Write", "input": {"file_path": "x.txt"}}]}})
+    open("x.txt", "w").write("made")
+    out({"type": "result", "is_error": False, "result": "Wrote x.txt",
+         "num_turns": 2, "total_cost_usd": 0.01, "session_id": "sess-1",
+         "permission_denials": [{"tool_name": "Bash"}]})
+    sys.exit(0)
+answer = "TOOLS=" + ",".join(a for a in args if a in ("", "--tools")) if text.startswith("FLAGS") \
+    else ("images=%d" % images if text.startswith("SEE") else "echo:" + text[:40])
+if "--include-partial-messages" in args:
+    for piece in (answer[:3], answer[3:]):
+        out({"type": "stream_event", "event": {"type": "content_block_delta",
+             "delta": {"type": "text_delta", "text": piece}}})
+out({"type": "result", "is_error": False, "result": answer, "session_id": "sess-1"})
+'''
+
+
+async def test_claude_code():
+    section("[20] Claude Code through the claude command")
+    if sys.platform == "win32":
+        check("skipped on Windows (the fake command is a script)", True)
+        return
+    import os
+    import stat
+    import tempfile
+    from core import claude_code as cc
+    from providers import registry
+    from providers.llm_claude_code import fold, parse_call
+
+    tmp = Path(tempfile.mkdtemp())
+    fake = tmp / "claude"
+    fake.write_text(_FAKE_CLAUDE.replace("{python}", sys.executable), encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+
+    decl = registry.get_declaration("claude_code")
+    check("listed as an LLM provider", decl is not None and decl["kind"] == "llm")
+    llm = registry.build("claude_code", {"binary": str(fake)})
+    check("tools in the prompt, can see", llm.caps["tool_format"] == "prompt" and llm.caps["vision"])
+
+    text, calls = llm.complete([{"role": "user", "content": "hello there"}])
+    check("one-shot answer comes back", text == "echo:hello there" and not calls, text)
+    flags = cc.ask("FLAGS", binary=str(fake))
+    check("one-shot runs with no tools", "--tools" in flags, flags)
+    img = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    text, _ = llm.complete([{"role": "user", "content": [{"type": "text", "text": "SEE"}, img]}])
+    check("an image reaches it", text == "images=1", text)
+
+    try:
+        llm.complete([{"role": "user", "content": "LIMIT"}])
+        check("usage limit reads as a quota error", False, "no raise")
+    except Exception as e:
+        from core import gemini
+        check("usage limit reads as a quota error", gemini.is_quota_error(str(e)), str(e))
+    try:
+        llm.complete([{"role": "user", "content": "CRASH"}])
+        check("a crash raises with stderr", False, "no raise")
+    except Exception as e:
+        check("a crash raises with stderr", "boom" in str(e), str(e))
+    t0 = __import__("time").monotonic()
+    try:
+        cc.ask("HANG", binary=str(fake), timeout=2)
+        check("a hang is killed at the deadline", False, "no raise")
+    except Exception as e:
+        took = __import__("time").monotonic() - t0
+        check(f"a hang is killed at the deadline ({took:.1f}s)",
+              took < 10 and "504" in str(e), str(e))
+
+    async def collect():
+        return [ev["text"] async for ev in llm.chat([{"role": "user", "content": "streamed"}])]
+    pieces = await collect()
+    check("chat streams in pieces", len(pieces) == 2 and "".join(pieces) == "echo:streamed",
+          str(pieces))
+
+    system, prompt, _ = fold([{"role": "system", "content": "S"},
+                              {"role": "user", "content": "hi"},
+                              {"role": "assistant", "content": None, "tool_calls": [
+                                  {"function": {"name": "f", "arguments": '{"a": 1}'}}]},
+                              {"role": "tool", "name": "f", "content": "42"},
+                              {"role": "user", "content": "and?"}])
+    check("a conversation folds into one request",
+          system == "S" and '"tool": "f"' in prompt and "[TOOL RESULT (f)]" in prompt
+          and prompt.rstrip().endswith("[ASSISTANT] label."), prompt)
+    call = parse_call('Sure.\n```json\n{"tool": "get_time", "args": {"tz": "UTC"}}\n```',
+                      {"get_time"})
+    check("a prompt-mode tool call is parsed",
+          call is not None and call.name == "get_time" and call.args == {"tz": "UTC"})
+    check("an invented tool is an answer, not a call",
+          parse_call('{"tool": "rm_rf", "args": {}}', {"get_time"}) is None)
+
+    work = tmp / "job"
+    work.mkdir()
+    seen = []
+    res = cc.run_agent("AGENT go", work, binary=str(fake),
+                       on_event=lambda k, t: seen.append(k))
+    check("an agent run reports result, session and refusals",
+          res.ok and res.text == "Wrote x.txt" and res.session_id == "sess-1"
+          and res.denied == ["Bash"] and (work / "x.txt").exists(), str(res))
+    check("its progress arrives as events", seen[:3] == ["init", "text", "tool"], str(seen))
+    res = cc.run_agent("x", work, binary=str(tmp / "missing"))
+    check("a missing command is reported, not raised", not res.ok and "not found" in res.error)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 async def main() -> int:
     print("providers self-test")
@@ -1095,6 +1219,10 @@ async def main() -> int:
     test_voices_follow_the_language()
     test_voice_folder_is_writable()
     test_a_chosen_voice_downloads_itself()
+    # Before the panel test: that one leaves a voice-catalog download running
+    # whose callback reaches widgets it has already deleted, and a slow test
+    # after it gives the download time to land (a segfault, not a FAIL).
+    await test_claude_code()
     test_panel_settings_survive()
 
     print(f"\n{'=' * 56}")

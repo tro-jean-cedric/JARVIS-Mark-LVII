@@ -683,7 +683,8 @@ _player_ref = None
 
 
 _PHASES = {"improve": ["reading", "planning", "writing", "checking", "testing"],
-           "build": ["planning", "writing", "installing", "testing"]}
+           "build": ["planning", "writing", "installing", "testing"],
+           "claude": ["reading", "working", "checking", "testing"]}
 
 
 def _new_job(folder: Path, model: str, instruction: str, player,
@@ -1506,6 +1507,341 @@ def _improve_folder(folder: Path, instruction: str, player=None) -> str:
     return msg
 
 
+# ── Claude Code as the coding agent ─────────────────────────────────────────
+#
+# When CODING is set to Claude Code, a job is not planned and written file by
+# file here. Claude Code works in the folder itself — it reads what it needs,
+# edits, runs the tests and fixes what fails — and this side does what it
+# cannot be trusted to report about itself:
+#
+#   * a snapshot BEFORE it starts, so what changed is read off the disk, not
+#     taken from its summary;
+#   * originals of every changed or deleted file go to .jarvis_backup/<time>/
+#     and the job is one undo entry, exactly like a file-by-file job;
+#   * protected files (secrets, anything .gitignore keeps out) are put back if
+#     it touched them;
+#   * the syntax check, the project's own checks and its tests run again after
+#     it, judged against how the tests stood before.
+#
+# It runs with acceptEdits, so it can only write inside the folder. Commands
+# are allowed when "Coding jobs may run commands" is on (the default, matching
+# what the file-by-file agent already does: install and run the project).
+
+_CC_SNAPSHOT_FILE_MAX = 2_000_000       # bytes kept per file for undo
+_CC_SNAPSHOT_TOTAL_MAX = 300_000_000
+_CC_DENY = ["Bash(git push *)", "Bash(sudo *)", "Bash(rm -rf /*)", "Bash(rm -rf ~*)"]
+
+
+def _uses_claude_code() -> bool:
+    return _coding_provider().partition("@")[0] == "claude_code"
+
+
+def _who() -> str:
+    """The coding model's name as the user would say it."""
+    provider = _coding_provider()
+    if provider.partition("@")[0] == "claude_code":
+        return "Claude Code"
+    return provider.partition("@")[2] or provider or "the coding model"
+
+
+def _cc_settings() -> dict:
+    try:
+        from memory.config_manager import get_provider_config
+        return dict(get_provider_config("claude_code") or {})
+    except Exception:
+        return {}
+
+
+def _cc_snapshot(folder: Path, keep_bytes: bool = True
+                 ) -> tuple[dict[str, tuple[int, int]], dict[str, bytes]]:
+    """(rel -> (size, mtime_ns), rel -> original bytes) for every file outside
+    dependency and build folders. Bytes are kept for files small enough to put
+    back; anything larger is only watched."""
+    import os
+    stats: dict[str, tuple[int, int]] = {}
+    data: dict[str, bytes] = {}
+    total = 0
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for name in files:
+            full = Path(root) / name
+            try:
+                st = full.stat()
+            except OSError:
+                continue
+            rel = full.relative_to(folder).as_posix()
+            stats[rel] = (st.st_size, st.st_mtime_ns)
+            if (keep_bytes and st.st_size <= _CC_SNAPSHOT_FILE_MAX
+                    and total + st.st_size <= _CC_SNAPSHOT_TOTAL_MAX):
+                try:
+                    data[rel] = full.read_bytes()
+                    total += st.st_size
+                except OSError:
+                    pass
+            if len(stats) >= 50_000:
+                return stats, data
+    return stats, data
+
+
+def _cc_diff(folder: Path, before: dict, originals: dict[str, bytes]
+             ) -> tuple[list[str], list[str], list[str]]:
+    """(edited, created, deleted) — read off the disk."""
+    after, _ = _cc_snapshot(folder, keep_bytes=False)
+    edited, created = [], []
+    for rel, st in after.items():
+        if rel not in before:
+            created.append(rel)
+        elif st != before[rel]:
+            old = originals.get(rel)
+            if old is None:
+                edited.append(rel)
+                continue
+            try:
+                if (folder / rel).read_bytes() != old:
+                    edited.append(rel)
+            except OSError:
+                edited.append(rel)
+    deleted = [rel for rel in before if rel not in after]
+    return sorted(edited), sorted(created), sorted(deleted)
+
+
+def _cc_prompt(instruction: str, kind: str, language: str = "") -> str:
+    if kind == "build":
+        return (f"Create a new {language or 'python'} project in the current folder, "
+                f"which is empty and is the project's root.\n\nWhat it should do:\n"
+                f"{instruction}\n\nKeep it small and complete: every file it needs, a "
+                f"README.md that says how to install and run it, and a dependency file "
+                f"when it has dependencies. Run it once (with a short timeout for anything "
+                f"that would keep running) to check it starts, and fix what fails. Finish "
+                f"with two or three sentences: what you built, how to run it, and anything "
+                f"that does not work yet.")
+    return (f"{instruction}\n\nWork in the current folder, which is the project. Follow "
+            f"its own rules and conventions. Run its tests or checks when it has them "
+            f"and fix what your change breaks. Do not touch files of secrets or files "
+            f"the .gitignore keeps out, and do not commit or push. Finish with two or "
+            f"three sentences: what you changed and anything left undone.")
+
+
+def _cc_run(folder: Path, prompt: str, guide: str, player=None):
+    """Run Claude Code in `folder`, mirroring its progress into the job panel."""
+    from core import claude_code
+    cfg = _cc_settings()
+    allow_cmds = str(cfg.get("allow_commands", True)).lower() not in ("", "0", "false", "no")
+    allowed = ["Read", "Edit", "Write", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"]
+    if allow_cmds:
+        allowed.append("Bash")
+    try:
+        minutes = float(cfg.get("job_minutes") or 30)
+    except (TypeError, ValueError):
+        minutes = 30.0
+    try:
+        budget = float(cfg.get("max_budget_usd") or 0)
+    except (TypeError, ValueError):
+        budget = 0.0
+
+    def on_event(kind: str, text: str) -> None:
+        if kind == "init":
+            _log(player, f"Claude Code session {text[:8]}… started.")
+        elif kind == "tool":
+            name, _, arg = text.partition(" ")
+            if name in ("Edit", "Write", "MultiEdit", "NotebookEdit") and arg:
+                try:
+                    rel = Path(arg).resolve().relative_to(folder).as_posix()
+                except (ValueError, OSError):
+                    rel = arg
+                with _state_lock:
+                    if _JOB:
+                        f = _JOB["files"].setdefault(rel, {"what": ""})
+                        f["action"] = "edit" if (folder / rel).exists() else "create"
+                        f["state"] = "writing"
+                _publish()
+            _log(player, f"  ▸ {text[:160]}")
+        elif kind == "text":
+            _log(player, text[:300])
+
+    system = ("You are running unattended as the coding agent of a desktop voice "
+              "assistant; nobody can answer questions, so make reasonable choices "
+              "and say what you assumed.")
+    if guide:
+        system += "\n\nPROJECT RULES — every change must follow these exactly:\n" + guide
+    return claude_code.run_agent(
+        prompt, folder, system_append=system,
+        model=str(cfg.get("model") or "").strip(),
+        effort=str(cfg.get("effort") or "").strip(),
+        allowed=allowed, disallowed=_CC_DENY,
+        permission_mode="acceptEdits", max_budget_usd=budget,
+        timeout=max(60.0, minutes * 60), on_event=on_event,
+        binary=str(cfg.get("binary") or "").strip())
+
+
+def _claude_code_job(folder: Path, instruction: str, player=None,
+                     kind: str = "improve", language: str = "") -> str:
+    """A whole coding job done by Claude Code, checked here afterwards."""
+    started = time.monotonic()
+    _update("reading")
+    _log(player, f"{'Building' if kind == 'build' else 'Improving'} '{folder.name}' "
+                 f"with Claude Code…")
+    before, originals = _cc_snapshot(folder)
+
+    stack, baseline, guide = None, None, ""
+    try:
+        from core.code_checks import describe_stack, detect_stack, project_guide, run_tests
+        if kind != "build":
+            stack = detect_stack(folder)
+            _log(player, f"Project: {describe_stack(stack)}")
+            guide = project_guide(folder, stack)
+            if stack.get("test_cmd"):
+                _log(player, f"Running the project's tests first ({stack['test_name']})…")
+                baseline = run_tests(folder, stack)
+    except Exception as e:
+        _log(player, f"Could not study the project: {str(e)[:150]}")
+
+    _update("working")
+    res = _cc_run(folder, _cc_prompt(instruction, kind, language), guide, player)
+    if res.session_id:
+        _update(session=res.session_id)
+
+    _update("checking")
+    edited, created, deleted = _cc_diff(folder, before, originals)
+
+    # Protected files go back the way they were, whatever it meant by it.
+    from core.code_checks import Protection
+    protection = Protection(folder)
+    put_back = []
+    for rel in [r for r in edited + deleted if protection.reason(r)]:
+        if rel in originals:
+            try:
+                target = folder / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(originals[rel])
+                put_back.append(rel)
+            except OSError:
+                pass
+    edited = [r for r in edited if r not in put_back]
+    deleted = [r for r in deleted if r not in put_back]
+    if put_back:
+        _log(player, f"Put back protected file(s) it changed: {', '.join(put_back)}")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = folder / _BACKUP_DIR / stamp
+    unrestorable = []
+    for rel in edited + deleted:
+        if rel in originals:
+            dest = backup / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(originals[rel])
+            except OSError:
+                unrestorable.append(rel)
+        else:
+            unrestorable.append(rel)
+
+    with _state_lock:
+        if _JOB:
+            files = {}
+            for rel in edited:
+                files[rel] = {"action": "edit", "state": "done", "what": ""}
+            for rel in created:
+                files[rel] = {"action": "create", "state": "done", "what": ""}
+            for rel in deleted:
+                files[rel] = {"action": "delete", "state": "done", "what": ""}
+            _JOB["files"] = files
+            _JOB["summary"] = res.text[:400]
+
+    written: dict[str, str] = {}
+    for rel in edited + created:
+        text = _read_text(folder / rel)
+        if text is not None:
+            written[rel] = text
+    broken = {rel: err for rel, text in written.items() if (err := _syntax_error(rel, text))}
+    problems: dict[str, str] = dict(broken)
+    regress = ""
+    try:
+        from core.code_checks import detect_stack, run_tests, static_problems, test_regressions
+        stack = detect_stack(folder) if stack is None else stack
+        if written:
+            for rel, p in static_problems(folder, written, stack).items():
+                problems[rel] = (problems.get(rel, "") + " " + p).strip()
+        if stack.get("test_cmd") and (edited or created or deleted):
+            _update("testing")
+            _log(player, f"Running the project's tests ({stack['test_name']})…")
+            regress = test_regressions(baseline, run_tests(folder, stack))
+    except Exception as e:
+        _log(player, f"Checks after the change were skipped: {str(e)[:150]}")
+    for rel in problems:
+        _update(file=rel, file_state="broken")
+
+    if edited or created or deleted:
+        def restore() -> str:
+            for rel in edited + deleted:
+                if rel in originals:
+                    try:
+                        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+                        (folder / rel).write_bytes(originals[rel])
+                    except OSError:
+                        pass
+            for rel in created:
+                try:
+                    (folder / rel).unlink()
+                except OSError:
+                    pass
+            return f"Put '{folder.name}' back as it was before Claude Code's change."
+        try:
+            from core.undo import push_undo
+            push_undo(f"Claude Code's changes to {folder.name}", restore)
+        except Exception:
+            pass
+        _open_vscode(folder)
+        if kind != "build":
+            _refresh_brief(folder)
+
+    took = time.monotonic() - started
+    if not res.ok and not (edited or created or deleted):
+        msg = f"Claude Code could not do it, sir: {res.error[:300]}. Nothing in '{folder.name}' changed."
+        _log(player, msg)
+        return msg
+
+    parts = []
+    if edited:
+        parts.append(f"changed {len(edited)} file{'s' if len(edited) != 1 else ''} "
+                     f"({', '.join(edited[:12])}{'…' if len(edited) > 12 else ''})")
+    if created:
+        parts.append(f"created {len(created)} ({', '.join(created[:12])}"
+                     f"{'…' if len(created) > 12 else ''})")
+    if deleted:
+        parts.append(f"deleted {len(deleted)} ({', '.join(deleted[:12])})")
+    if not parts:
+        msg = (f"Claude Code finished in {took:.0f}s but nothing in '{folder.name}' "
+               f"changed on disk. It said: {res.text[:400]}")
+        _log(player, msg)
+        return msg
+
+    msg = f"Done with '{folder.name}' by Claude Code in {took:.0f}s: {' and '.join(parts)}."
+    if res.text:
+        msg += f" It says: {res.text[:500]}"
+    if not res.ok:
+        msg += f" It stopped early: {res.error[:200]}."
+    if problems:
+        msg += (" These still have problems: "
+                + "; ".join(f"{r} — {p[:140]}" for r, p in list(problems.items())[:6]) + ".")
+    if regress:
+        msg += f" Tests: {regress[:300]}"
+    if res.denied:
+        msg += f" It was not allowed to use: {', '.join(res.denied)}."
+    if put_back:
+        msg += f" I put back protected files it touched: {', '.join(put_back)}."
+    if edited or deleted:
+        msg += f" Originals are in {_BACKUP_DIR}/{stamp}; say 'undo' to restore them."
+    elif created:
+        msg += " Say 'undo' to remove the new files."
+    if unrestorable:
+        msg += f" Too large to back up, so undo cannot restore: {', '.join(unrestorable[:6])}."
+    if res.session_id:
+        msg += f" (Continue it in a terminal with: claude --resume {res.session_id})"
+    _log(player, msg)
+    return msg
+
+
 def _start_improve(folder_raw: str, instruction: str, speak=None, player=None) -> str:
     """Start a folder job in the background and answer at once.
 
@@ -1526,7 +1862,11 @@ def _start_improve(folder_raw: str, instruction: str, speak=None, player=None) -
         return f"I am still working on '{_job_name}', sir. One folder at a time."
     _job_name = folder.name
 
-    who = _coding_provider().partition("@")[2] or "the coding model"
+    who = _who()
+    if _uses_claude_code():
+        _new_job(folder, who, instruction, player, kind="claude")
+        return _run_job(lambda: _claude_code_job(folder, instruction, player),
+                        folder.name, who, speak, player)
     _new_job(folder, who, instruction, player, kind="improve")
     return _run_job(lambda: _improve_folder(folder, instruction, player),
                     folder.name, who, speak, player)
@@ -1550,7 +1890,8 @@ def _run_job(job, name: str, who: str, speak=None, player=None) -> str:
             if not wrote:
                 status = "nothing changed"
             elif ("couldn't fully fix" in result or "could not" in result.lower()
-                  or "still fail their test" in result):
+                  or "still fail their test" in result
+                  or "still have problems" in result or "stopped early" in result):
                 status = "finished with problems"
         except Exception as e:
             status = "failed"
@@ -1580,7 +1921,26 @@ def _start_build(description: str, language: str, project_name: str,
         return f"I am still working on '{_job_name}', sir. One job at a time."
     name = re.sub(r"[^\w\-]", "_", project_name) if project_name else "new project"
     _job_name = name
-    who = _coding_provider().partition("@")[2] or "the coding model"
+    who = _who()
+    if _uses_claude_code():
+        # A fresh folder, never one that already holds somebody's project.
+        words = project_name or "_".join(re.findall(r"[A-Za-z0-9]+", description)[:4])
+        base = re.sub(r"[^\w\-]", "_", words).strip("_").lower()[:40] or "jarvis_project"
+        folder = PROJECTS_DIR / base
+        n = 2
+        while folder.exists() and any(folder.iterdir()):
+            folder = PROJECTS_DIR / f"{base}_{n}"
+            n += 1
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            _job_lock.release()
+            return f"I could not create the project folder, sir: {e}"
+        _job_name = folder.name
+        _new_job(folder, who, description, player, kind="claude")
+        return _run_job(lambda: _claude_code_job(folder, description, player,
+                                                 kind="build", language=language),
+                        folder.name, who, speak, player)
     _new_job(PROJECTS_DIR / name, who, description, player, kind="build")
     return _run_job(lambda: _build_project(description, language, project_name,
                                            timeout, speak=None, player=player),

@@ -32,6 +32,33 @@ Callers must handle `None` with a small fallback. Actions mostly use
 private names (`_LADDERS`, `_cool`, `_provider_rungs`) — change those
 carefully.
 
+## Claude Code (`core/claude_code.py`, `providers/llm_claude_code.py`)
+
+The `claude` CLI, run headless. One runner, three uses:
+
+- **As a model** — provider id `claude_code` (kind `llm`, no catalog). Chosen
+  under BACKGROUND REQUESTS, CODING or ② THINKING like any provider, so every
+  `gemini.call(..., provider=...)` and the task ladder can use it.
+  `complete()`/`chat()` fold the OpenAI-style messages into one stream-json
+  request (images included), run with `--tools ""` and the lean flags
+  (`--strict-mcp-config --disable-slash-commands --setting-sources ""` plus our
+  own system prompt file — ~600 tokens instead of ~104k), and describe tools in
+  the prompt (`tool_format: "prompt"`). A usage limit raises `429 …` so the
+  ladder rests the rung like a quota error.
+- **As the coding agent** — when CODING is `claude_code`, `dev_agent` improve
+  and build jobs go to `_claude_code_job`: Claude Code works in the folder
+  (`acceptEdits`, Bash only if "Coding jobs may run commands"), and dev_agent
+  snapshots before, diffs the disk after, restores protected files, backs up
+  originals to `.jarvis_backup/`, pushes one undo entry and re-runs syntax,
+  profile checks and tests against the pre-change baseline.
+- **As a background agent** — `agents/claude_code.md` (`mode: claude_code`),
+  see `data_model.md`.
+
+Settings live under `providers.creds.claude_code` (model, allow_commands,
+effort, max_budget_usd, job_minutes, binary). The binary is found on PATH or
+in the usual install folders (`find_binary`). Tests: section [20] of
+`python -m providers._tests` drives the runner against a fake `claude` script.
+
 ## The conversation engine
 
 Default: Gemini Live, opened in `main.py:_open_session` (`main.py:2647`); model

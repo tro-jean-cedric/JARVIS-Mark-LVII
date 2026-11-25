@@ -20,6 +20,9 @@ paragraph can add one.
 `research` runs it through the research method instead (core/tasks/research.py):
 a plan, an investigation per sub-question with quotes checked against the pages
 read, a review for gaps, and a report written only from what was recorded.
+`claude_code` hands the whole task to Claude Code (core/tasks/claude_task.py);
+`tools` then names Claude Code's own built-in tools (WebSearch, WebFetch, Read,
+Write, Edit, Glob, Grep, Bash), not the task tools in core/tasks/tools.py.
 
 The header is read by hand — `key: value`, one per line — so profiles need no
 YAML package. A file that is not valid is skipped with a reason in the log and
@@ -32,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
-MODES = ("", "agent", "research")
+MODES = ("", "agent", "research", "claude_code")
 
 
 @dataclass

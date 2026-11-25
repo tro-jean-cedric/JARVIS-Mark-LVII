@@ -77,6 +77,12 @@ Hand-parsed header (not YAML) between `---` lines, then the instructions body
 `rounds` (default 40; engine clamps to 400). Files starting `_`/`.` and
 `README.md` are skipped. See `agents/researcher.md`.
 
+`mode: claude_code` (`agents/claude_code.md`) skips the round loop: the task
+goes to Claude Code via `core/tasks/claude_task.py`, `tools` then names Claude
+Code's built-in tools (WebSearch, WebFetch, Read, Write, Edit, Glob, Grep,
+Bash), and the task stores its session id as `cc_session` so a restart, a
+steer note or "finish" resumes the same session instead of starting over.
+
 ## Routine engine (`core/routines/`)
 
 - Rules (`core/routines/rules.py`): `once{at_ts}`, `weekly{time,days}`,

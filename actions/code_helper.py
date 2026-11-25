@@ -26,12 +26,23 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 
+def _coding_provider() -> str:
+    """The service chosen under ENGINE & PROVIDERS → CODING, or ''."""
+    try:
+        from memory.config_manager import get_coding_provider
+        return get_coding_provider()
+    except Exception:
+        return ""
+
+
 def _get_gemini(tier: str = gemini.SMART):
     """Writing and fixing code is the reasoning tier; a 60s deadline because a
     whole file can come back."""
     class _W:
         def generate_content(self, contents):
-            resp = gemini.call(contents, tier=tier, timeout_ms=60000)
+            # The model chosen under CODING, with the Gemini ladder behind it.
+            resp = gemini.call(contents, tier=tier, timeout_ms=60000,
+                               provider=_coding_provider())
             if resp is None:
                 raise RuntimeError("every Gemini model on the ladder failed")
             return resp
@@ -489,7 +500,8 @@ Be specific and actionable. If you see an error message, quote it exactly."""
             analysis_prompt,
         ]
 
-        response = gemini.call(contents, tier=gemini.SMART, timeout_ms=45_000)
+        response = gemini.call(contents, tier=gemini.SMART, timeout_ms=45_000,
+                               provider=_coding_provider())
         if response is None:
             return "Sir, I couldn't reach Gemini to analyse that screenshot."
 

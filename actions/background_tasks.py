@@ -126,7 +126,9 @@ TOOL = {
         "list. For a quick answer the user is waiting for, use web_search instead. "
         "start = hand the task to an agent — agent 'researcher' for research (it plans, reads "
         "sources in full, checks every quote against the page and writes a cited report), "
-        "'general' for other work; task = the whole request, self-contained, in the user's words; "
+        "'general' for other work, 'claude_code' to have Claude Code do it (when the user asks for "
+        "Claude Code, or the work is mostly writing, running or checking code, scripts or files); "
+        "task = the whole request, self-contained, in the user's words; "
         "minutes = the time budget when the user gives one ('research this for 10 minutes' -> 10); "
         "without one, 10 for research, more (20-40) when the user asks for something thorough or "
         "in depth; at = start later, "
@@ -146,7 +148,7 @@ TOOL = {
             "action": {"type": "STRING",
                        "enum": ["start", "list", "status", "result", "finish", "cancel", "steer", "agents"]},
             "task": {"type": "STRING", "description": "for start: the whole task, self-contained"},
-            "agent": {"type": "STRING", "description": "for start: researcher | general"},
+            "agent": {"type": "STRING", "description": "for start: researcher | general | claude_code"},
             "minutes": {"type": "INTEGER", "description": "for start: time budget in minutes"},
             "at": {"type": "STRING", "description": "for start: when to begin, local time"},
             "deliver": {"type": "STRING", "enum": ["voice", "panel", "silent"],

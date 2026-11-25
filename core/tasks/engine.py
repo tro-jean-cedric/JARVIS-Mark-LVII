@@ -322,6 +322,11 @@ class TaskEngine:
         task = self.store.get(tid)
         flags = self._flags[tid]
         profile = self.agents().get(task["agent"]) or agent_profiles.FALLBACK
+        if getattr(profile, "mode", "") == "claude_code":
+            # Claude Code brings its own tools and its own loop.
+            from core.tasks.claude_task import run as run_claude_code
+            run_claude_code(self, tid, flags, profile)
+            return
         tools = self._tools_factory(task, profile)
         decls = tools.declarations()
         system = self._system_prompt(task, profile, getattr(tools, "has_web", True))
