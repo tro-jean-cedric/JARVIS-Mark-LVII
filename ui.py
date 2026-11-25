@@ -97,6 +97,24 @@ def _apply_ui_scale() -> None:
         os.environ["QT_SCALE_FACTOR"] = f"{scale:.2f}"
 
 
+def _keep_slot_errors_alive() -> None:
+    """PyQt6 aborts the whole process (qFatal) when a slot raises and
+    sys.excepthook is still the default: one bad paint or tick would end the
+    voice session. Seen live (Nov 2026). A hook that prints keeps it alive."""
+    if sys.excepthook is not sys.__excepthook__:
+        return
+
+    def hook(kind, value, tb):
+        try:
+            import traceback
+            print("[UI] unhandled error in a Qt callback (kept running):")
+            traceback.print_exception(kind, value, tb)
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+
+
 class JarvisUI:
     def __init__(self, face_path: str, size=None):
         _apply_ui_scale()
@@ -107,6 +125,7 @@ class JarvisUI:
             from PyQt6.QtCore import QCoreApplication, Qt
             QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
         self._app = QApplication.instance() or QApplication(sys.argv)
+        _keep_slot_errors_alive()
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
