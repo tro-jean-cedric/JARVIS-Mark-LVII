@@ -783,6 +783,9 @@ class JarvisLive:
         self._said_fold = ""           # recent words we spoke, folded (echo check)
         self._said_at = 0.0
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        # Features behind the "use_feature" tool this session (core/tool_router.py);
+        # None while the router is off — set by _build_config.
+        self._router_menu = None
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -1690,7 +1693,25 @@ class JarvisLive:
                 print(f"[JARVIS] {len(_blocked)} tool(s) withheld — "
                       f"this engine cannot serve them")
 
-        _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
+        # The tool router (off unless "tool_router" is set): features marked
+        # tier "extra" leave the live list and sit behind one "use_feature"
+        # tool, so they stop costing context on every turn. Off, or when too
+        # few would move, the list is left exactly as it is.
+        self._router_menu = None
+        try:
+            from core import tool_router
+            if tool_router.enabled():
+                _before = len(_all_decls)
+                _all_decls, self._router_menu = tool_router.build(
+                    _all_decls, self._plugin_registry.switched_off())
+                if self._router_menu is not None:
+                    print(f"[Router] {len(self._router_menu.features)} feature(s) "
+                          f"behind {tool_router.ROUTER_NAME}; live tools "
+                          f"{_before} → {len(_all_decls)}")
+        except Exception as _e:
+            print(f"[Router] left off: {_e}")
+
+        _names ={(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
             "assistant_name": self._asst_name,
@@ -1858,6 +1879,24 @@ class JarvisLive:
 
         self.ui.set_state("THINKING")
 
+        # "use_feature" (core/tool_router.py): work out which feature and its
+        # real arguments, then fall through to the ordinary chain below as if
+        # the model had called that feature itself. The answer still goes back
+        # under the name the model called (`call_name`).
+        call_name = name
+        if name == "use_feature" and self._router_menu is not None:
+            _menu = self._router_menu
+            _convo = "\n".join(self._session_log[-6:])
+            _real, _real_args, _answer = await asyncio.to_thread(
+                _menu.resolve, args.get("feature", ""), args.get("request", ""), _convo)
+            if _answer is not None:
+                print(f"[Router] {args.get('feature')!r} not run: {_answer[:120]}")
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
+                return types.FunctionResponse(id=fc.id, name=call_name,
+                                              response={"result": _answer})
+            print(_redact(f"[Router] use_feature → {_real}  {_real_args}"))
+            name, args = _real, _real_args
 
         if name == "save_memory":
             category = args.get("category", "notes")
@@ -2081,11 +2120,14 @@ class JarvisLive:
         # something like a phone call already ringing, is exactly the noise the
         # non-blocking call was meant to avoid. Tools that declared nothing get
         # the API default and behave as they always have.
-        _sched = (self._action_registry.scheduling(name)
-                  or self._plugin_registry.scheduling(name))
+        # A call that came through the router was blocking (use_feature is), so
+        # the routed tool's own scheduling does not apply to it.
+        _sched = None if call_name != name else (
+            self._action_registry.scheduling(name)
+            or self._plugin_registry.scheduling(name))
         _extra = {"scheduling": _sched} if _sched else {}
         return types.FunctionResponse(
-            id=fc.id, name=name,
+            id=fc.id, name=call_name,
             response={"result": result},
             **_extra
         )

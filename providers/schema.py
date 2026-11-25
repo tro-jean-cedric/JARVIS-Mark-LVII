@@ -93,6 +93,9 @@ CORE_TOOLS: tuple[str, ...] = (
     "reminder",
     "video_player",
     "close_camera",
+    # Exists only while the tool router is on (core/tool_router.py); it is the
+    # one door to every feature behind it, so a budget must never cut it.
+    "use_feature",
 )
 
 

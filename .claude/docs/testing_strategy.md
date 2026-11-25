@@ -12,6 +12,7 @@ entry points plus running the app.
 | `python -m providers.schema` | tool declarations from main.py and actions convert cleanly; prints the tool budget for small models | stdlib only (verified) |
 | `python -m plugins._holo_desk_tests` | Holo Desk logic: panels, throw physics, every gesture (carry, fling, scroll, two-hand resize, pull nearer, clap/spread, ring, dock, point, rotate), mouse, hand filter, saved desks — synthetic hands at 30 fps | stdlib only; no camera, window or network |
 | `python -m plugins._face_lock_tests` | Face Lock's unlock PIN (wrong tries, 30 s wait, no PIN) and when the lock screen covers the computer | no camera, window or saved face |
+| `python -m core._tool_router_tests` | tool router + argument checker: which declarations move behind `use_feature`, argument repair, resolve with a stand-in model (good / repaired / no answer / crash / switched off), savings on the real registries, and main.py's real `_execute_tool` routing a call | stdlib for the logic; the main.py section needs `requirements.txt` (skipped otherwise); no network or key |
 | `python -m core.screenview` / `python -m core.screenact` | screen-reading / input capabilities on this machine (`screenact` moves the mouse) | GUI session |
 
 `providers/_tests.py` is a hand-rolled harness: `check(name, cond, detail)`

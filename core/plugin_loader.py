@@ -162,6 +162,20 @@ class PluginRegistry:
                 decls.append(decl)
         return decls
 
+    def switched_off(self) -> list[tuple[str, str]]:
+        """(name, short summary) of every working plugin the user turned off.
+
+        For the tool router (core/tool_router.py), which keeps listing them so
+        the assistant answers "that is switched off, here is how to turn it
+        on" instead of improvising with another tool. Plugins waiting for
+        review are left out: they are not something to switch on."""
+        out = []
+        for name, rec in self._plugins.items():
+            if rec.valid and not rec.review and not self._enabled(name):
+                text = " ".join(str(rec.brief or rec.description or "").split())
+                out.append((name, text[:110]))
+        return out
+
     def has(self, name: str) -> bool:
         return name in self._plugins
 

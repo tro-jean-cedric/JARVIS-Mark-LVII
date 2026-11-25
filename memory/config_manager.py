@@ -306,6 +306,22 @@ def save_proactive_audio_enabled(enabled: bool) -> None:
     _save_flag("proactive_audio", enabled)
 
 
+def get_tool_router_enabled() -> bool:
+    """Whether rarely used features are offered through one "use_feature"
+    tool instead of each being declared to the live model (core/tool_router.py).
+
+    Off by default: the live model then gets every tool directly, as it always
+    has. On, every declaration marked "tier": "extra" moves behind the router,
+    which shortens what the live session carries on every turn at the cost of
+    one short text-model call when such a feature is used.
+    """
+    return bool(load_api_keys().get("tool_router", False))
+
+
+def save_tool_router_enabled(enabled: bool) -> None:
+    _save_flag("tool_router", enabled)
+
+
 MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
 
 

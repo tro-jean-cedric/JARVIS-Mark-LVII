@@ -70,6 +70,7 @@ built-in actions.
 | window_control | macOS move to another monitor; Linux Wayland |
 | cloud_agent | parity with Torvis's hosted "cloud body" where it makes sense self-hosted |
 | Remote Mode | sleep, then wake on a timer (`core.park`); switch the computer's smart plug (Tuya cloud, Shelly cloud, VoiceMonkey); automatic Wake-on-LAN setup on Windows (adapter settings, Fast Startup off); a settings panel |
+| Tool router (`core/tool_router.py`, `core/tool_args.py`, commit COMMIT) | built and self-tested, **off by default** (`"tool_router": true` in config) and never tried against live Gemini; not ported: the live model's own first-try arguments and an earlier tool result as extra context for the argument writer; bundled plugins with no `tier` (build_guide, calorie_counter, fridge_chef, planet_watch…) stay direct — tag them `"extra"` to move them behind the router |
 | Voice providers | Gemini as speech-to-text and as voice (user's own key); Silero voice-activity detection as an option (keep the energy detector as default) |
 | live_subtitles · whatsapp_call | built, but never tested against real audio loopback / real WhatsApp |
 
@@ -80,44 +81,38 @@ built-in actions.
 Evidence = line numbers in the Torvis string dump used for the comparison
 (regenerate it as described in `TORVIS_PORT_PROMPT.md`).
 
-1. **Tool router** — rarely used plugins behind one "run a feature" tool;
-   a second model call fills that feature's real arguments; switched-off
-   features stay listed with how to switch them on. Cuts what Gemini Live is
-   sent on every turn. *Medium.* Evidence: `core.tool_budget`, `core.tool_args`
-   (~3298422–3298840). Touches `main.py` tool assembly — read
-   `.claude/docs/architectural_patterns.md` first.
-2. **Screen-agent eyes** — before each step, mark clickable things with
+1. **Screen-agent eyes** — before each step, mark clickable things with
    numbers, wait until the screen stops changing, spot loading / busy areas.
    *Medium*, opencv + pillow. Evidence: `plugins._screen_eyes`
    (~3795549–3796358). Target: `plugins/_screen_loop.py`.
-3. **App controls without the mouse** — press, toggle, set text / number /
+2. **App controls without the mouse** — press, toggle, set text / number /
    choice through accessibility (pywinauto UIA on Windows, AX on macOS,
    AT-SPI on Linux); works on background windows; refuses password fields.
    *Medium.* Evidence: `core.uiact` (~3298901–3299388). Target:
    `core/screenact.py`.
-4. **Instant "on it" lines + see-or-do check** — three short spoken
+3. **Instant "on it" lines + see-or-do check** — three short spoken
    acknowledgements per language, generated once and cached, said while a slow
    job runs; before a screenshot, decide whether the request needs seeing or
    doing and route things a still picture cannot answer elsewhere. *Small.*
    Evidence: ~3194539, ~3194626.
-5. **Capability self-test** — one command / voice request that checks
+4. **Capability self-test** — one command / voice request that checks
    languages, TLS, Playwright, yt-dlp, speaker capture, VAD and wake-word
    models and says what is missing. *Small–medium.* Evidence: `core.selftest`
    (~3293045–3293461). Extends `assistant_help`'s diagnose.
-6. **Numbers said as words for local voices** — numbers, dates, times,
+5. **Numbers said as words for local voices** — numbers, dates, times,
    ranges, money, units, phone numbers and sums spelled out in the user's
    language before Piper / system voices read them; cache short replies.
    *Medium*, needs `babel` (new dependency — ask first). Evidence:
    `providers._numbers`, `_speakable` (~3857518–3858394). Target:
    `providers/engine_pipeline.py` `_speakable`.
-7. **Desktop notifications** — `notify-send` / macOS / Windows toast for
+6. **Desktop notifications** — `notify-send` / macOS / Windows toast for
    finished tasks and reminders. *Small.* Evidence: `core.notify`.
-8. **Brave Search with the user's own key** — an extra web-search source.
+7. **Brave Search with the user's own key** — an extra web-search source.
    *Small.* Evidence: `core.brave` (~3265044).
-9. **Plugin sandbox** — user-added plugins run in a separate host process with
+8. **Plugin sandbox** — user-added plugins run in a separate host process with
    an allow-list of libraries. *Medium.* Evidence: `core.script_host`
    (~3292662–3292892). Target: `core/plugin_loader.py`.
-10. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+9. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
     providers, connected_apps OAuth, planet_watch (large — split it), the rest.
 
 ---
@@ -140,6 +135,7 @@ Things built and tested in code but never tried for real:
   macOS treats it keeping focus
 - OpenAI-compatible voice against a real Kokoro / OpenAI server
 - open_app's resolver on Windows and Linux, and with the Gemini key
+- the tool router switched on (`"tool_router": true`) in a real Gemini Live session: that the model calls `use_feature` for listed features and the written arguments are right
 - the items listed under "Not verified on real hardware/accounts" in
   `TORVIS_PARITY.md`
 
@@ -147,6 +143,7 @@ Things built and tested in code but never tried for real:
 
 ## Log
 
+- 2026-11-25 — Tool router (to-do #1) built as 🟡: `use_feature` + argument writer + argument checker, off by default; 62 → 41 live declarations (−30 % characters) when on. Self-test `python -m core._tool_router_tests`. Wording check: 0 overlaps.
 - 2026-11-25 — Holo Desk full port + improvements; installed-apps resolver;
   OpenAI-compatible voice; Face Lock lock screen; HUD camera for Face Lock.
   User-facing wording that had been taken from Torvis rewritten in our own
