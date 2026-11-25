@@ -370,6 +370,8 @@ class OpenAICompatLLM:
             except Exception:
                 pass
         self.timeout = float(cfg.get("timeout") or 60.0)
+        ka = str(cfg.get("keep_alive") or "").strip()
+        self.keep_alive = (int(ka) if ka.lstrip("-").isdigit() else ka) or "1h"
 
         # A budget on a model running on your own hardware, unless the user
         # chose one themselves.
@@ -444,6 +446,12 @@ class OpenAICompatLLM:
             # calling the right tool. Ollama ignores this for models that
             # cannot think, so it is safe to send to every model it serves.
             body["reasoning_effort"] = "none"
+            # Ollama unloads an idle model after 5 minutes by default, and the
+            # prompt cache goes with it: the next question re-reads thousands
+            # of tokens (measured 15-20 s with qwen3.5:9b). An hour covers the
+            # pauses of a normal day; "keep_alive" in this provider's settings
+            # overrides it (Ollama syntax: "30m", "2h", -1 = never unload).
+            body["keep_alive"] = self.keep_alive
         if "minimax" in self.base:
             # MiniMax's M2 models put their thinking inline as <think>…</think>
             # unless asked not to. The pipeline filters that out of speech, but
