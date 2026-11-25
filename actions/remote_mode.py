@@ -50,6 +50,28 @@ def remote_mode(parameters: dict, player=None) -> str:
                 "computer is switched on again (power button, Wake-on-LAN or a smart plug).",
                 rm.hibernate_now)
 
+        if action == "park":
+            from core import confirm, park
+            at = park.wake_time(str(a.get("wake_at") or ""), a.get("minutes"))
+            if at is None:
+                return ("When should it wake? Give wake_at as a time like 07:00, or minutes "
+                        "from now.")
+            ok, why = park.supported()
+            if not ok:
+                return f"This computer cannot wake itself by a timer here: {why}"
+            if at - park._now() < park.MIN_SECONDS or at - park._now() > park.MAX_SECONDS:
+                return "The wake time has to be between 2 minutes and a week from now."
+            if confirm.pending_title():
+                return "Another confirmation is already waiting; answer that one first."
+            say = getattr(player, "request_say", None) if player is not None else None
+
+            def go() -> str:
+                return park.park(at, on_resume=say)[1]
+            return confirm.request(
+                "remote_mode.park", f"Sleep now, wake by itself at {park._clock(at)}",
+                "The assistant goes offline while the computer sleeps and reconnects when it "
+                "wakes. Open apps keep their state.", go)
+
         if action == "wake_info":
             return rm.wol_howto()
 
@@ -67,7 +89,8 @@ def remote_mode(parameters: dict, player=None) -> str:
             return msg
 
         return ("I can: status, keep_awake (on true/false), lock_when_idle (on, minutes), "
-                "lock_now, screen_off, hibernate, wake_info, wake_setup, send_wake.")
+                "lock_now, screen_off, hibernate, park (wake_at or minutes), wake_info, "
+                "wake_setup, send_wake.")
     except Exception as e:
         return f"Remote Mode failed: {e}"
 
@@ -79,21 +102,24 @@ TOOL = {
         "keep_awake (on true/false): stop it going to sleep while the assistant runs (the "
         "screen still turns off); lock_when_idle (on, minutes): lock it after that many "
         "minutes nobody used it; lock_now; screen_off; hibernate: 'turn it off completely' "
-        "(the user confirms on screen or on the phone); wake_info: this PC's MAC address and "
+        "(the user confirms on screen or on the phone); park (wake_at '07:00' or minutes): "
+        "sleep now and wake by itself at that time (the user confirms; not every computer "
+        "allows it, and the answer says why); wake_info: this PC's MAC address and "
         "how to enable Wake-on-LAN so another device can switch it on; wake_setup (host = "
         "public IP/DDNS, port, mac, or url of a smart plug): saved for the cloud agent to wake "
         "it; send_wake (mac, host, port): send a Wake-on-LAN packet to another computer; "
         "status: what is on."),
-    "brief": "Keep the PC awake, lock when idle, hibernate, Wake-on-LAN info/setup.",
+    "brief": "Keep the PC awake, lock when idle, hibernate, sleep until a time, Wake-on-LAN.",
     "tier": "extra",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {"type": "STRING", "enum": [
                 "status", "keep_awake", "lock_when_idle", "lock_now", "screen_off",
-                "hibernate", "wake_info", "wake_setup", "send_wake"]},
+                "hibernate", "park", "wake_info", "wake_setup", "send_wake"]},
             "on": {"type": "BOOLEAN"},
             "minutes": {"type": "INTEGER"},
+            "wake_at": {"type": "STRING"},
             "mac": {"type": "STRING"},
             "host": {"type": "STRING"},
             "port": {"type": "INTEGER"},

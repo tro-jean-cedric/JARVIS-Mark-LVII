@@ -834,7 +834,7 @@ class JarvisLive:
             notify=lambda msg: self.ui.write_log(f"SYS: {msg}"),
         )
         self.ui.get_plugins = self._plugin_registry.list_for_ui
-        self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
+        self.ui.get_plugin_settings = self._settings_sections                 # ⚙ settings tab
         # + ADD PLUGIN in the Plugin Manager: re-read one user plugin at once.
         self.ui.on_user_plugin_changed = self._plugin_registry.refresh_user_plugin
         # "Things to say" chips under the head (core/suggest.py).
@@ -1203,6 +1203,17 @@ class JarvisLive:
             print("[JARVIS] Weekly recap sent.")
         except Exception as e:
             print(f"[Recap] {e}")
+
+    def _settings_sections(self) -> list[dict]:
+        """⚙ PLUGIN SETTINGS: the plugins' own sections, then Remote Mode's
+        (an action, so it has no PLUGIN_SETTINGS of its own)."""
+        sections = list(self._plugin_registry.settings_schemas())
+        try:
+            from core import remote_mode
+            sections.append(remote_mode.settings_section())
+        except Exception as e:
+            print(f"[Settings] Remote Mode section unavailable: {e}")
+        return sections
 
     def _suggestions(self) -> list[str]:
         """'Things to say' chips for the window (core/suggest.py, no model call)."""

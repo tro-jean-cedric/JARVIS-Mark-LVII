@@ -366,6 +366,10 @@ EXTRA_GUIDES: dict[str, dict] = {
         "time": "about 10 minutes for Wake-on-LAN",
         "steps": [
             "Say \"keep the computer awake while I'm away\" — it stops sleeping until you say otherwise.",
+            "Say \"sleep now and wake up at 7\" — it sleeps and wakes by itself at that time "
+            "(you confirm first). Windows: 'Allow wake timers' must be on in the power options. "
+            "macOS and Linux only let an administrator set the wake time; when that is not "
+            "allowed, the answer tells you the command for a daily wake time instead.",
             "Say \"show me how to wake this computer\" — it tells you this computer's MAC address.",
             "Wake-on-LAN needs a network CABLE (not Wi-Fi) and 'Wake on LAN' switched on in the "
             "computer's BIOS/UEFI and in the network adapter's settings (Windows: Device Manager → "

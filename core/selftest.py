@@ -348,6 +348,15 @@ def check_plugin_sandbox():
         'reinstall the requirements, or set "plugin_sandbox": false to run added plugins inside the app'
 
 
+def check_park():
+    """Whether the computer can be put to sleep and woken by a timer."""
+    from core import park
+    ok, how = park.supported()
+    if ok:
+        return PASS, f"'sleep until a time' works here ({how})", ""
+    return OFF, "the computer cannot wake itself by a timer here", how
+
+
 def check_notifications():
     """Whether the system's notifications can be used (nothing is shown)."""
     from core import notify
@@ -462,6 +471,7 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("numbers", check_numbers, False),
     ("brave", check_brave, True),
     ("notifications", check_notifications, False),
+    ("park", check_park, False),
     ("plugin_sandbox", check_plugin_sandbox, False),
     ("wake_word", check_wake_word, False),
     ("screen", check_screen, False),

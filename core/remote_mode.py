@@ -431,6 +431,55 @@ def status_text() -> str:
     return "Remote Mode: " + "; ".join(bits) + "."
 
 
+def apply_settings(values: dict) -> tuple[bool, str]:
+    """Switch keep-awake and lock-when-idle to match `values` now (the
+    settings panel's APPLY NOW; the panel has already saved them)."""
+    v = dict(values or {})
+    try:
+        minutes = max(1, min(240, int(str(v.get("lock_minutes") or DEFAULT_LOCK_MINUTES).strip())))
+    except ValueError:
+        return False, "Minutes before locking must be a whole number (1 to 240)."
+    save_settings(lock_minutes=minutes)
+    problems = []
+    ok, msg = keep_awake(bool(v.get("keep_awake")))
+    if not ok:
+        problems.append(msg)
+    lock_when_idle(False)                     # restart so a new minute count takes effect
+    if v.get("lock_when_idle"):
+        ok, msg = lock_when_idle(True)
+        if not ok:
+            problems.append(msg)
+    if problems:
+        return False, " ".join(problems)
+    return True, status_text()
+
+
+def settings_section() -> dict:
+    """Remote Mode's section in ⚙ PLUGIN SETTINGS (main.py adds it to the
+    plugins' sections): the saved switches, APPLY NOW, and the guide."""
+    s = settings()
+    try:
+        from core import setup_guides
+        guide = setup_guides.all_guides().get(NS)
+    except Exception:
+        guide = None
+    return {
+        "plugin": NS, "namespace": NS, "title": "Remote Mode",
+        "fields": [
+            {"key": "keep_awake", "type": "toggle", "default": False,
+             "label": "Keep the computer awake while the assistant runs (the screen still turns off)"},
+            {"key": "lock_when_idle", "type": "toggle", "default": False,
+             "label": "Lock it when nobody has used it for a while"},
+            {"key": "lock_minutes", "type": "text", "default": str(DEFAULT_LOCK_MINUTES),
+             "label": "Minutes without use before it locks"},
+        ],
+        "values": {"keep_awake": s["keep_awake"], "lock_when_idle": s["lock_when_idle"],
+                   "lock_minutes": str(s["lock_minutes"])},
+        "action": {"label": "APPLY NOW", "run": apply_settings},
+        "guide": guide,
+    }
+
+
 def start_from_settings(log=None) -> None:
     """Apply the saved switches when the app starts. Safe to call twice."""
     s = settings()
