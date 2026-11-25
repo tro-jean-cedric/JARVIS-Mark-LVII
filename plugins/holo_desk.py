@@ -68,8 +68,38 @@ PLUGIN = {
     },
 }
 
-STORE = "holo_desk"
+PLUGIN_SETTINGS = {
+    "namespace": "holo_desk",
+    "title": "Holo Desk",
+    "fields": [
+        {"key": "pinch_sensitivity", "label": "Pinch sensitivity", "type": "choice",
+         "options": ["gentle", "normal", "firm"], "default": "normal"},
+        {"key": "start_mode", "label": "Open in", "type": "choice",
+         "options": ["camera", "overlay"], "default": "camera"},
+        {"key": "remember_layout", "label": "Bring back the last layout when it opens",
+         "type": "toggle", "default": True},
+        {"key": "show_hands", "label": "Show the hands it sees", "type": "toggle",
+         "default": True},
+        {"key": "sounds", "label": "Sounds", "type": "toggle", "default": True},
+    ],
+}
+
+STORE = core.STORE
 OPEN_WAIT = 4.0
+
+
+def _setting(key, default=None):
+    try:
+        from memory.config_manager import get_plugin_setting
+        return get_plugin_setting("holo_desk", key, default)
+    except Exception:
+        return default
+
+
+def _truthy(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
 
 
 def _wait(cond, seconds: float) -> bool:
@@ -98,7 +128,12 @@ def _open(player, mode: str = "") -> str:
     from plugins import _camera
     if not _camera.available():
         return "it needs OpenCV, which is not installed (pip install opencv-python)"
-    ui.holo_desk("open", mode=mode or "camera")
+    desk = core.shared()
+    # An empty desk picks up where the last session left off.
+    if not desk.live() and not desk.hidden and _truthy(_setting("remember_layout", True)):
+        core.load_last(desk)
+    start = str(_setting("start_mode", "camera") or "camera").lower()
+    ui.holo_desk("open", mode=mode or (start if start in ("camera", "overlay") else "camera"))
     if not _wait(lambda: core.STATE.get("open"), OPEN_WAIT):
         return "the desk could not be opened" + (
             f" ({core.STATE['camera']})" if core.STATE.get("camera") else "")

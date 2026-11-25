@@ -418,6 +418,8 @@ class Pointer:
     angle: float = 0.0          # hand rotation, radians
     open_palm: bool = False
     pointing: bool = False
+    pinch: float = 0.0          # 0 = open .. 1 = pinched, for the cursor
+    pts: Optional[list] = None  # the hand's 21 points on the screen, for the skeleton
 
 
 @dataclass
@@ -685,6 +687,12 @@ class Input:
                     desk.snap(panel)
                     events.append(("drop", panel.pid))
 
+    def hold_progress(self, t: float) -> list:
+        """(x, y, 0..1) for each pinch held on empty space, on its way to the
+        ring — drawn as an arc that fills, so holding still has visible meaning."""
+        return [(g.x0, g.y0, min(1.0, (t - g.t0) / self.HOLD_TIME))
+                for g in self.grips.values() if g.mode == "hold" and t - g.t0 > 0.12]
+
     def row_at(self, panel: Panel, y: float) -> int:
         """Which list row a point is on (-1 = none)."""
         if not panel.rows:
@@ -768,13 +776,27 @@ class HandFilter:
     the jitter the landmark model has from frame to frame, and decides "pinched"
     with hysteresis so a pinch on the edge does not flicker on and off."""
 
-    PINCH_ON = 0.33           # thumb-index gap in palm sizes
-    PINCH_OFF = 0.50
-    SMOOTH = 0.45             # weight of the new position (1 = no smoothing)
+    # (pinch on, pinch off) as a thumb-index gap in palm sizes. "gentle"
+    # counts a looser pinch; "firm" wants the fingers really together.
+    SENSITIVITY = {"gentle": (0.40, 0.58), "normal": (0.33, 0.50), "firm": (0.27, 0.42)}
+    # Smoothing follows speed (the idea of the 1-euro filter): a still hand is
+    # smoothed hard so the cursor does not shiver, a fast one hardly at all so
+    # it does not lag behind a throw.
+    SMOOTH_SLOW = 0.25        # weight of the new position when still
+    SMOOTH_FAST = 0.85        # ... when moving fast
+    FAST = 1.5                # screen widths per second counted as "fast"
     LOST = 0.25               # seconds a vanished hand keeps its slot (and its pinch)
 
-    def __init__(self):
+    def __init__(self, sensitivity: str = "normal"):
         self.slots: dict[str, dict] = {}
+        self.PINCH_ON, self.PINCH_OFF = self.SENSITIVITY.get(sensitivity,
+                                                             self.SENSITIVITY["normal"])
+
+    def _alpha(self, s: dict, cx: float, cy: float, t: float) -> float:
+        dt = max(1e-3, t - s.get("seen", t - 1 / 30))
+        speed = math.hypot(cx - s["x"], cy - s["y"]) / dt
+        k = min(1.0, speed / self.FAST)
+        return self.SMOOTH_SLOW + (self.SMOOTH_FAST - self.SMOOTH_SLOW) * k
 
     def update(self, hands: list, to_screen: Callable[[float, float], tuple],
                t: float) -> list:
@@ -793,7 +815,7 @@ class HandFilter:
                                     "size": hand.size}
             taken.add(best)
             s = self.slots[best]
-            a = self.SMOOTH
+            a = self._alpha(s, cx, cy, t)
             s["x"] += (cx - s["x"]) * a
             s["y"] += (cy - s["y"]) * a
             s["size"] += (hand.size - s["size"]) * a
@@ -801,9 +823,15 @@ class HandFilter:
             s["seen"] = t
             r = hand.pinch_ratio
             s["down"] = r < (self.PINCH_OFF if s["down"] else self.PINCH_ON)
+            # 0 = fingers wide open, 1 = pinched: drawn by the cursor, so the
+            # user sees how close a pinch is before it counts.
+            closeness = min(1.0, max(0.0, (1.0 - r) / (1.0 - self.PINCH_ON)))
+            pts = getattr(hand, "pts", None)
             out.append(Pointer(best, s["x"], s["y"], s["down"], size=max(s["size"], 1e-3),
                                angle=s["angle"], open_palm=hand.open_palm and not s["down"],
-                               pointing=hand.pointing and not s["down"]))
+                               pointing=hand.pointing and not s["down"],
+                               pinch=1.0 if s["down"] else closeness,
+                               pts=[to_screen(*q) for q in pts] if pts else None))
         for k in list(self.slots):
             s = self.slots[k]
             if k in taken:
@@ -837,3 +865,48 @@ def shared() -> Desk:
         if _shared is None:
             _shared = Desk()
         return _shared
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  The last layout, kept between sessions
+# ─────────────────────────────────────────────────────────────────────────────
+STORE = "holo_desk"          # memory/plugin_data/holo_desk.json: {"desks": {...}, "last": [...]}
+
+
+def save_last(desk: Desk) -> str:
+    """Keep the panels as they are now, to come back next time. '' or why not."""
+    try:
+        from plugins import _announce
+        data = _announce.load(STORE, {}) or {}
+        if not isinstance(data, dict):
+            data = {}
+        data["last"] = desk.to_list() + [dict(p.to_dict(), hidden=True) for p in desk.hidden]
+        _announce.save(STORE, data)
+        return ""
+    except Exception as e:
+        print(f"[HoloDesk] layout not saved: {e}")
+        return str(e)
+
+
+def load_last(desk: Desk) -> int:
+    """Put the last session's panels back (also the ones put away). Panel count."""
+    try:
+        from plugins import _announce
+        data = _announce.load(STORE, {}) or {}
+        items = data.get("last") if isinstance(data, dict) else None
+        if not isinstance(items, list) or not items:
+            return 0
+        shown = [d for d in items if isinstance(d, dict) and not d.get("hidden")]
+        hidden = [d for d in items if isinstance(d, dict) and d.get("hidden")]
+        n = desk.load_list(shown)
+        if hidden:
+            extra = Desk(clock=desk._clock)
+            extra._next = desk._next + 100
+            extra.load_list(hidden)
+            with desk.lock:
+                desk.hidden = extra.panels
+                desk._next = extra._next
+        return n + len(hidden)
+    except Exception as e:
+        print(f"[HoloDesk] the last layout could not be loaded: {e}")
+        return 0
