@@ -1208,6 +1208,11 @@ def _ax_children(AS: Any, node: Any) -> list[Any]:
         return []
 
 
+# "secure" in the languages macOS ships its role descriptions in most often.
+_SECURE_WORDS = ("secure", "sécuris", "securis", "sicher", "segur", "protett",
+                 "beveilig", "bezpieczn", "güvenli", "защищ", "安全", "セキュア", "보안")
+
+
 def _element_from_ax(AS: Any, node: Any, eid: int, depth: int
                      ) -> tuple[Optional[Element], str]:
     raw_role = _ax_attr(AS, node, "AXRole") or ""
@@ -1246,7 +1251,13 @@ def _element_from_ax(AS: Any, node: Any, eid: int, depth: int
     # itself stays AXTextField, so a check on role alone would miss every
     # password box on the platform.
     subrole = str(_ax_attr(AS, node, "AXSubrole") or "")
-    protected = "secure" in subrole.lower()
+    # Not every toolkit sets the subrole: Qt's password box on macOS reports
+    # no AXSubrole at all and says it only in AXRoleDescription ("secure text
+    # field") - measured. Either one is enough to treat the field as secret.
+    role_text = str(_ax_attr(AS, node, "AXRoleDescription") or "")
+    # The description is in the system language, hence the word stems.
+    protected = ("secure" in subrole.lower()
+                 or any(s in role_text.lower() for s in _SECURE_WORDS))
 
     value_raw = _ax_attr(AS, node, "AXValue")
     value = str(value_raw) if isinstance(value_raw, (str, int, float)) else ""

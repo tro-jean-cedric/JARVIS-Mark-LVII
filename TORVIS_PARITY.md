@@ -89,7 +89,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | persona | Persistent character: how to address the user, tone, humour, length | ✅ | `[PERSONA]` block added to the system prompt (main.py `_build_config`); undoable |
 | action_history | Week-long log of what the assistant did; "what did you do yesterday?" | ✅ | Recorded in main.py `_execute_tool` (no content, whitelisted params only); `[RECENT ACTIONS]` in prompt |
 | window_control | Windows by app name: min/max/snap/focus/move monitor/list/close others/per-app volume | 🟡 | Windows full (per-app volume via pycaw); macOS via System Events without move_to_monitor; Linux X11 via wmctrl/xdotool, not Wayland |
-| app_control | Operate an app through its accessibility interface | ✅ | list/press/read/type via screenview/screenact; model risk check → confirm; never types into password fields |
+| app_control | Operate an app through its accessibility interface | ✅ | list/press/read/type via screenview/screenact; model risk check → confirm; never types into password fields. Without the mouse (Torvis `core.uiact`, `core/uiact.py`): press / toggle / type / set number / options / choose through AX, UIA or AT-SPI on background windows, read back after every change; tried first, pointer as fallback; also for `screen_agent` quick steps. Live-tested on macOS only |
 | assistant_help | Assistant's own manual + diagnose | ✅ | New `manual/en.md` written for JARVIS; diagnose shows live state |
 | open_app, browser_control, computer_control, computer_settings, desktop, file_controller, file_processor, reminder, routines, proactive, send_message, system_monitor, video_player, weather_report, web_search, screen_processor, background_tasks, background_monitor | — | ➖ | Already in JARVIS |
 
@@ -134,6 +134,8 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 - 2026-11-25 — Tool router (`core/tool_router.py`, `core/tool_args.py`, self-test `python -m core._tool_router_tests`); off by default.
 
 - 2026-11-25 — Screen-agent eyes (`plugins/_screen_eyes.py`, self-test `python -m plugins._screen_eyes_tests`).
+
+- 2026-11-25 — App controls without the mouse (`core/uiact.py`, self-test `python -m core._uiact_tests [--live]`).
 
 ## Totals (2026-11-24)
 

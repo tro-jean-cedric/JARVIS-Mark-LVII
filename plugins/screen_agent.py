@@ -118,6 +118,33 @@ def _setting(key: str, default):
         return default
 
 
+def _without_mouse(p: dict):
+    """The quick step done through actions/app_control.without_mouse, or None
+    to leave it to the loop. A failure there is also left to the loop, which
+    may still manage it by looking and clicking."""
+    do = str(p.get("do") or "press").strip().lower()
+    action, replace = {
+        "press": ("press", False), "click": ("press", False), "open": ("press", False),
+        "toggle": ("toggle", False), "switch": ("toggle", False),
+        "type": ("type", True), "write": ("type", True), "enter": ("type", True),
+        "add": ("type", False), "append": ("type", False),
+        "choose": ("choose", False), "select": ("choose", False), "pick": ("choose", False),
+        "set": ("set", False),
+    }.get(do, (None, False))
+    if action is None:
+        return None
+    try:
+        from actions.app_control import without_mouse
+        r = without_mouse(action, str(p.get("app") or ""), str(p.get("control") or ""),
+                          str(p.get("text") or ""), replace)
+    except Exception as e:
+        print(f"[ScreenAgent] quick step without the mouse: {e}")
+        return None
+    if r is None or r.startswith("status=failed"):
+        return None
+    return r
+
+
 def _quick_goal(p: dict) -> str:
     app = str(p.get("app") or "").strip()
     control = str(p.get("control") or "").strip()
@@ -179,6 +206,15 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
         if busy:
             return (f"I am already working on the screen: \"{agent.goal}\". Ask the user whether to "
                     "stop that first.")
+
+        # A quick, named step goes through the program's accessibility
+        # interface first: done at once, in the background, without the
+        # pointer. Anything that cannot be done that way (or fails) is left to
+        # the look-and-click loop below.
+        if quick and p.get("control"):
+            fast = _without_mouse(p)
+            if fast is not None:
+                return fast
 
         try:
             from plugins import _screen_loop as loop
