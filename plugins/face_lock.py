@@ -57,6 +57,8 @@ PLUGIN_SETTINGS = {
          "type": "toggle", "default": False},
         {"key": "unlock_pin", "label": "Unlock PIN (needed to lock at start)",
          "type": "password", "default": ""},
+        {"key": "show_camera", "label": "Show the camera on the HUD while scanning or locked",
+         "type": "toggle", "default": True},
     ],
 }
 
@@ -96,6 +98,139 @@ def _greeting() -> str:
     return f" Greet them as {name}." if name else ""
 
 
+# ── The camera on the HUD ────────────────────────────────────────────────────
+#
+# While a face scan runs or the assistant is locked, the large HUD area shows the
+# webcam picture with a box round each face the lock is looking at: green for
+# the owner, red for anyone else, blue while scanning. A separate thread draws it
+# at ~12 fps from the shared camera stream; the scan and the watcher only look
+# every half second, and drawing from their loops would stutter. The pictures go
+# to this computer's window and nowhere else, and none is kept.
+
+_VIEW_FPS = 12
+_COLOURS = {"owner": (120, 220, 0), "unknown": (60, 60, 255), "scanning": (255, 200, 0)}  # BGR
+_viewer: Optional[threading.Thread] = None
+_viewer_lock = threading.Lock()
+
+
+def _viewing() -> bool:
+    enrolling = _enroll_thread is not None and _enroll_thread.is_alive()
+    return enrolling or core.is_locked()
+
+
+def _draw(frame, view: dict, caption: str, colour=None):
+    """The mirrored picture with face boxes and a status bar. Pure OpenCV."""
+    import cv2
+    img = cv2.flip(frame, 1)                 # a mirror, the way people expect to see themselves
+    h, w = img.shape[:2]
+    fresh = time.time() - float(view.get("at") or 0) < 1.5
+    for x, y, bw, bh, label in (view.get("faces") or []) if fresh else []:
+        col = _COLOURS.get(label, _COLOURS["scanning"])
+        x0, y0 = int((1 - x - bw) * w), int(y * h)
+        x1, y1 = int((1 - x) * w), int((y + bh) * h)
+        cv2.rectangle(img, (x0, y0), (x1, y1), col, 2)
+        tag = {"owner": "OWNER", "unknown": "NOT THE OWNER"}.get(label, "")
+        if tag:
+            cv2.putText(img, tag, (x0, max(14, y0 - 8)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, col, 2, cv2.LINE_AA)
+    bar = max(28, h // 14)
+    cv2.rectangle(img, (0, 0), (w, bar), (10, 6, 0), -1)
+    text = "FACE LOCK  |  " + caption
+    scale = bar / 48
+    # Shrink a long coaching hint to fit; past half size, cut it instead.
+    while cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] > w - 20:
+        if scale > bar / 96:
+            scale *= 0.92
+        elif len(text) > 12:
+            text = text[:-4] + "..."
+        else:
+            break                            # a picture too small for any text
+    cv2.putText(img, text, (10, int(bar * 0.68)), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                colour or (255, 220, 120), 1, cv2.LINE_AA)
+    return img
+
+
+def _caption() -> str:
+    view = core.last_view()
+    if time.time() - float(view.get("at") or 0) < 1.5 and view.get("caption"):
+        return str(view["caption"])
+    if _enroll_thread is not None and _enroll_thread.is_alive():
+        return "Face scan - look at the camera"
+    return "Locked - look at the camera"
+
+
+def _view_loop() -> None:
+    from plugins import _camera
+    p = _announce.player()
+    send = getattr(p, "show_hud_frame", None)
+    if not callable(send) or not _camera.subscribe("face_lock_view"):
+        return
+    shown = False
+    last = None
+    try:
+        while _viewing() and _truthy(_setting("show_camera", True)):
+            time.sleep(1.0 / _VIEW_FPS)
+            frame = _camera.latest(1.0)
+            if frame is None or frame is last:
+                continue
+            last = frame
+            send(_camera.encode_jpeg(_draw(frame, core.last_view(), _caption()), 960, 70))
+            shown = True
+        # One last picture saying how it ended, so the HUD does not just snap back.
+        if shown and _truthy(_setting("show_camera", True)) and not core.is_locked():
+            end, ok = _ending()
+            frame = _camera.latest(1.0)
+            if frame is not None:
+                send(_camera.encode_jpeg(_draw(
+                    frame, core.last_view(), end,
+                    _COLOURS["owner"] if ok else _COLOURS["unknown"]), 960, 70))
+                time.sleep(1.5)
+    except Exception as e:
+        print(f"[face_lock] camera view stopped: {e}")
+    finally:
+        _camera.unsubscribe("face_lock_view")
+        if shown:
+            stop = getattr(p, "stop_hud_frames", None)
+            if callable(stop):
+                stop()
+
+
+# How the last face scan ended: None while none has finished, '' on success,
+# else the reason it failed. Set by _enroll_worker.
+_scan_result: list = [None]
+
+
+def _ending() -> tuple[str, bool]:
+    """(closing caption, good news?) for the last frame of the view."""
+    if _scan_result[0] is not None:
+        err = _scan_result[0]
+        _scan_result[0] = None
+        return ("Face saved", True) if not err else ("Face scan failed", False)
+    if time.time() - core.owner_seen_at() < 5:
+        return "Owner recognised - unlocked", True
+    return "Unlocked", True
+
+
+def _show_camera() -> None:
+    """Start the HUD camera view if it is wanted and not already running."""
+    global _viewer
+    if not _truthy(_setting("show_camera", True)):
+        return
+    with _viewer_lock:
+        if _viewer is not None and _viewer.is_alive():
+            return
+        _viewer = threading.Thread(target=_view_loop, name="face-lock-view", daemon=True)
+        _viewer.start()
+
+
+def _on_lock_change(locked: bool) -> None:
+    if locked:
+        _show_camera()
+
+
+core.on_change(_on_lock_change)
+
+
 def _on_unlock() -> None:
     _announce.log("Face lock: owner recognised - unlocked.")
     _announce.say("The owner's face was recognised, so the assistant is unlocked and "
@@ -111,6 +246,7 @@ def _enroll_worker() -> None:
         err = core.enroll(_enroll_stop, _prompt)
     except Exception as e:
         err = str(e)
+    _scan_result[0] = err or ""
     if err:
         _announce.say(f"The face scan failed: {err}. Tell the user briefly.")
         return
@@ -165,6 +301,7 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                 _enroll_thread = threading.Thread(target=_enroll_worker, name="face-enroll",
                                                   daemon=True)
                 _enroll_thread.start()
+            _show_camera()
             tip = "" if _setting("unlock_pin") else (
                 " Suggest setting an unlock PIN in Face lock's settings, for when the camera "
                 "cannot see them.")

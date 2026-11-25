@@ -58,6 +58,25 @@ def is_owner_present(window: float = PRESENT_WINDOW) -> bool:
     return _owner_seen_at > 0 and time.time() - _owner_seen_at <= window
 
 
+_view: dict = {"faces": [], "caption": "", "at": 0.0}
+
+
+def last_view() -> dict:
+    """What the scan or the watcher saw last, for drawing on the HUD:
+    {"faces": [(x, y, w, h, label)], "caption": str, "at": time}. Boxes are
+    fractions of the frame (0..1), so they fit a picture of any size; label is
+    "owner", "unknown" or "scanning". Nothing here is a picture."""
+    return dict(_view)
+
+
+def _saw(frame, rows, labels, caption: str = "") -> None:
+    global _view
+    h, w = frame.shape[:2]
+    faces = [(float(r[0]) / w, float(r[1]) / h, float(r[2]) / w, float(r[3]) / h, lab)
+             for r, lab in zip(rows, labels)]
+    _view = {"faces": faces, "caption": caption, "at": time.time()}
+
+
 def on_change(fn: Callable[[bool], None]) -> None:
     """Register fn(locked) to hear about lock/unlock (called on a worker thread)."""
     _listeners.append(fn)
@@ -175,6 +194,13 @@ def enroll(stop: threading.Event, prompt: Callable[[str], None] = lambda s: None
         vecs = []
         hints = ["", "Now turn your head a little to the left",
                  "Now turn your head a little to the right"]
+        tip = ["Look at the camera"]
+        coach = prompt
+
+        def prompt(text: str) -> None:          # also shown on the HUD
+            tip[0] = text
+            coach(text)
+
         end = time.time() + ENROLL_TIMEOUT
         last = 0.0
         while time.time() < end and len(vecs) < ENROLL_VIEWS and not stop.is_set():
@@ -183,6 +209,8 @@ def enroll(stop: threading.Event, prompt: Callable[[str], None] = lambda s: None
             if frame is None:
                 continue
             rows = eyes.faces(frame)
+            _saw(frame, rows[:3], ["scanning"] * len(rows[:3]),
+                 f"Face scan {len(vecs)}/{ENROLL_VIEWS} - {tip[0]}")
             if len(rows) > 1:
                 prompt("Only the owner should be in view")
                 continue
@@ -269,12 +297,14 @@ def _watch(stored: list, on_unlock, on_stranger) -> None:
             frame = _frame()
             if frame is None:
                 continue
-            rows = eyes.faces(frame)
-            owner = False
-            for r in rows[:3]:
-                if best_match(eyes.embed(frame, r), stored) >= COSINE_MATCH:
-                    owner = True
-                    break
+            rows = eyes.faces(frame)[:3]
+            labels = ["owner" if best_match(eyes.embed(frame, r), stored) >= COSINE_MATCH
+                      else "unknown" for r in rows]
+            owner = "owner" in labels
+            _saw(frame, rows, labels,
+                 "Owner recognised - unlocked" if owner
+                 else "Not the owner - still locked" if rows
+                 else "Locked - look at the camera")
             if owner:
                 _owner_seen_at = time.time()
                 _set_locked(False)
