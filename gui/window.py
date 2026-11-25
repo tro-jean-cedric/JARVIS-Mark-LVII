@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
     _hud_frame_stop_sig = pyqtSignal()
     # The full-screen Holo Desk (gui/holo_desk.py): (command, arguments).
     _holo_sig       = pyqtSignal(str, object)
+    # Face Lock's lock screen (gui/lock_screen.py): (locked, {"owner": name}).
+    _lock_screen_sig = pyqtSignal(bool, object)
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _image_open_sig  = pyqtSignal(str, str)   # still picture on the HUD: path, title
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
@@ -441,6 +443,8 @@ class MainWindow(QMainWindow):
         self._hud_frame_sig.connect(self._on_hud_frame)
         self._hud_frame_stop_sig.connect(self._on_hud_frame_stop)
         self._holo_sig.connect(self._on_holo)
+        self._lock_screen_sig.connect(self._on_lock_screen)
+        self._lock_screens = None
         self._holo = None
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
@@ -563,6 +567,22 @@ class MainWindow(QMainWindow):
             holo_core.STATE.update(open=False, camera=f"the desk could not be opened: {e}")
             self._log.append_log(f"SYS: Holo Desk failed: {e}")
             self._holo = None
+
+    # Face Lock's lock screen: covers every screen while locked.
+    def _on_lock_screen(self, locked: bool, info) -> None:
+        try:
+            from .lock_screen import LockScreens
+            if self._lock_screens is None:
+                self._lock_screens = LockScreens()
+            if locked:
+                from PyQt6.QtGui import QGuiApplication
+                self._lock_screens.show(self.screen() or QGuiApplication.primaryScreen(),
+                                        QGuiApplication.screens(),
+                                        owner=str((info or {}).get("owner") or ""))
+            else:
+                self._lock_screens.hide()
+        except Exception as e:
+            self._log.append_log(f"SYS: the lock screen failed: {e}")
 
     def _holo_closed(self, already_closed: bool = False) -> None:
         w, self._holo = self._holo, None

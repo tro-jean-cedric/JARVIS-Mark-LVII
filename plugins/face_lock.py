@@ -59,6 +59,9 @@ PLUGIN_SETTINGS = {
          "type": "password", "default": ""},
         {"key": "show_camera", "label": "Show the camera on the HUD while scanning or locked",
          "type": "toggle", "default": True},
+        {"key": "lock_screen",
+         "label": "Cover the screen while locked (needs the unlock PIN as the other way in)",
+         "type": "toggle", "default": True},
     ],
 }
 
@@ -223,9 +226,23 @@ def _show_camera() -> None:
         _viewer.start()
 
 
+def _cover_wanted() -> bool:
+    """The full lock screen covers the computer only when there is a way past
+    it without the camera — the PIN. Without one, a broken camera would lock
+    the user out of their own machine, so it falls back to the HUD view."""
+    return _truthy(_setting("lock_screen", True)) and core.pin_set()
+
+
 def _on_lock_change(locked: bool) -> None:
+    p = _announce.player()
+    cover = getattr(p, "show_lock_screen", None)
     if locked:
+        if callable(cover) and _cover_wanted():
+            cover(True, owner=str(_setting("owner_name", "") or "").strip())
+            return
         _show_camera()
+    elif callable(cover):
+        cover(False)
 
 
 core.on_change(_on_lock_change)
@@ -321,14 +338,11 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
         if action == "unlock":
             if not core.is_locked():
                 return "Face lock is not locked."
-            pin = str(_setting("unlock_pin", "") or "")
             given = str(params.get("pin") or "").strip()
-            if pin and given and given == pin:
-                core.unlock()
-                return "Unlocked with the PIN."
-            if given:
-                return "That PIN is not right; still locked."
-            return "Still locked: it unlocks when the owner's face is seen, or with the PIN."
+            if not given:
+                return "Still locked: it unlocks when the owner's face is seen, or with the PIN."
+            ok, msg = core.try_pin(given)        # same tries count as the lock screen
+            return msg if ok else f"{msg} Still locked."
 
         if action == "forget":
             _enroll_stop.set()

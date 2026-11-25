@@ -277,6 +277,55 @@ def unlock() -> None:
     _set_locked(False)
 
 
+# ── The PIN: the way in when the camera cannot see the owner ─────────────────
+# Shared by the lock screen (gui/lock_screen.py) and the voice tool, so both
+# count the same wrong tries. Five wrong in a row and it waits half a minute.
+PIN_TRIES = 5
+PIN_WAIT = 30.0
+_pin_state = {"wrong": 0, "until": 0.0}
+
+
+def pin_set() -> bool:
+    return bool(_pin())
+
+
+def _pin() -> str:
+    try:
+        from memory.config_manager import get_plugin_setting
+        return str(get_plugin_setting("face_lock", "unlock_pin", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def pin_wait() -> float:
+    """Seconds before the next try is allowed (0 = now)."""
+    return max(0.0, _pin_state["until"] - time.time())
+
+
+def try_pin(given: str) -> tuple[bool, str]:
+    """(unlocked, what to tell the user). Unlocks on the right PIN."""
+    import hmac
+    wait = pin_wait()
+    if wait > 0:
+        return False, f"Too many wrong tries - wait {int(wait) + 1} s."
+    pin = _pin()
+    if not pin:
+        return False, "No unlock PIN is set (Face lock's settings)."
+    given = str(given or "").strip()
+    if not given:
+        return False, "Type the unlock PIN."
+    if hmac.compare_digest(given.encode(), pin.encode()):
+        _pin_state.update(wrong=0, until=0.0)
+        unlock()
+        return True, "Unlocked with the PIN."
+    _pin_state["wrong"] += 1
+    if _pin_state["wrong"] >= PIN_TRIES:
+        _pin_state.update(wrong=0, until=time.time() + PIN_WAIT)
+        return False, f"Wrong PIN, {PIN_TRIES} times - wait {int(PIN_WAIT)} s."
+    left = PIN_TRIES - _pin_state["wrong"]
+    return False, f"That PIN is not right ({left} tr{'ies' if left != 1 else 'y'} left)."
+
+
 def stop_scan() -> None:
     _scan_stop.set()
 

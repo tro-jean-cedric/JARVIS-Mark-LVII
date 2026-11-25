@@ -264,6 +264,7 @@ GUIDES: dict[str, dict] = {
             "While it scans or is locked, the middle of the screen shows the camera with a box "
             "round each face (green: you, red: someone else). Switch off SHOW THE CAMERA ON THE "
             "HUD to keep the avatar there instead.",
+            "With an unlock PIN set, locking covers the whole screen until it sees you; if the camera cannot, press UNLOCK ANOTHER WAY and type the PIN (five wrong tries make it wait 30 seconds). Switch off COVER THE SCREEN WHILE LOCKED to keep only the microphone locked.",
         ],
         "done": "Say \"lock\" — it unlocks by itself when it sees you, or with \"unlock\" and your PIN.",
     },

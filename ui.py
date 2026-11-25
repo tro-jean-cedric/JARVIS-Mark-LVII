@@ -459,6 +459,11 @@ class JarvisUI:
         """Thread-safe: give the large HUD area back to the avatar."""
         self._win._hud_frame_stop_sig.emit()
 
+    def show_lock_screen(self, locked: bool, owner: str = "") -> None:
+        """Thread-safe: cover every screen while Face Lock is locked
+        (gui/lock_screen.py), or take the cover away."""
+        self._win._lock_screen_sig.emit(bool(locked), {"owner": str(owner or "")})
+
     def holo_desk(self, cmd: str, **kw) -> None:
         """Thread-safe: drive the full-screen Holo Desk (gui/holo_desk.py).
         cmd: "open" (mode="camera" | "overlay"), "mode" (mode=...), "close".
