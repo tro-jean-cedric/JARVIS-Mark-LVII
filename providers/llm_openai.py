@@ -452,6 +452,50 @@ class OpenAICompatLLM:
             body["reasoning_split"] = True
         return body
 
+    async def warmup(self, messages: list[dict], tools: list[dict] | None = None,
+                     log=None) -> None:
+        """Have a LOCAL server process the system prompt and tools once, before
+        the user speaks, so the first real turn finds them in its cache.
+
+        Measured 2026-11-25, Ollama + qwen3.5:9b on an M4 Max, JARVIS's ~6k-token
+        prompt: the first question after launch took 7-25 s unwarmed, and
+        0.8 s after this warm-up (3 trials of 3).
+
+        TWO requests, differing only in the last message, and that is measured
+        too: after ONE, the first real question still took ~8 s and only the
+        second was fast. Models with recurrent layers (qwen3.5's hybrid
+        attention) cannot rewind a cache to an arbitrary point; Ollama keeps a
+        resume point where two prompts DIVERGED, and the second request is what
+        creates one exactly at the start of the user's message. `max_tokens: 1`
+        because nothing generated here is wanted. Hosted APIs are skipped: a
+        request there costs money and their caches are not ours to fill.
+        """
+        if not _is_loopback(self.base) or not messages:
+            return
+        t0 = time.monotonic()
+        try:
+            # Long deadline: the first call also loads the model from disk.
+            async with self._httpx.AsyncClient(timeout=max(self.timeout, 300.0),
+                                               trust_env=self._trust_env) as cl:
+                for last in (".", "Bonjour"):
+                    msgs = messages[:-1] + [{"role": "user", "content": last}]
+                    body = self._body(msgs, tools, False, None)
+                    body["max_tokens"] = 1
+                    r = await cl.post(f"{self.base}/chat/completions",
+                                      headers=self._headers(), json=body)
+                    if r.status_code >= 400:
+                        if log:
+                            log(f"SYS: language model warm-up refused: "
+                                f"{r.status_code} {_terse(r.text)}")
+                        return
+        except Exception as e:
+            if log:
+                log(f"SYS: language model warm-up failed: {type(e).__name__}: {e}")
+            return
+        if log:
+            log(f"SYS: language model ready in {time.monotonic() - t0:.1f}s "
+                f"({self.model})")
+
     # -- one-shot, synchronous: this is what core/gemini.py's ladder uses ----
     def complete(self, messages: list[dict], tools: list[dict] | None = None,
                  *, timeout: float | None = None,

@@ -143,6 +143,7 @@ class PipelineEngine:
             self._read_config(config)
 
         self._history: list[dict] = []
+        self._cut = 0        # first history entry still sent; see _trimmed()
         self._queue: asyncio.Queue = asyncio.Queue()
         self._gen: Optional[asyncio.Task] = None
         self._closed = False
@@ -232,16 +233,34 @@ class PipelineEngine:
         tool result whose call has been trimmed away is an orphan that several
         servers reject outright, and a model that keeps the result without the
         request reads it as something the user said.
+
+        THE CUT MOVES RARELY, AND IN BIG STEPS.
+            It used to slide forward by a message or two on EVERY turn once the
+            budget was reached. That changes the start of the history each
+            time, and a local server's prompt cache only reuses an unchanged
+            prefix — so from then on every turn re-read the whole prompt:
+            measured 15-20 s per reply with Ollama + qwen3.5:9b, against
+            0.4-1.9 s while the prefix held. Now, when the budget is exceeded,
+            the cut jumps to keep about HALF of it and then stays put until the
+            budget is exceeded again: one slow turn per many, not every turn.
         """
-        total, cut = 0, 0
-        for i in range(len(self._history) - 1, -1, -1):
-            total += len(json.dumps(self._history[i], ensure_ascii=False))
-            if total > self._history_chars:
-                cut = i + 1
-                break
-        while cut < len(self._history) and self._history[cut].get("role") == "tool":
-            cut += 1
-        return self._history[cut:]
+        size = lambda m: len(json.dumps(m, ensure_ascii=False))  # noqa: E731
+        if self._cut > len(self._history):
+            self._cut = 0
+        if sum(size(m) for m in self._history[self._cut:]) > self._history_chars:
+            total, cut = 0, len(self._history)
+            for i in range(len(self._history) - 1, self._cut - 1, -1):
+                total += size(self._history[i])
+                if total > self._history_chars // 2:
+                    break
+                cut = i
+            # Never start with the newest message missing: if the last one alone
+            # is over half the budget, keep it anyway.
+            cut = min(cut, len(self._history) - 1) if self._history else 0
+            while cut < len(self._history) and self._history[cut].get("role") == "tool":
+                cut += 1
+            self._cut = max(self._cut, cut)
+        return self._history[self._cut:]
 
     # ── the four methods main.py calls ───────────────────────────────────────
     async def send_realtime_input(self, *, audio) -> None:
@@ -401,6 +420,15 @@ class PipelineEngine:
             warm = getattr(part, "warmup", None)
             if warm is not None:
                 jobs.append(warm(self._log))
+        # And the model: a local server reads the whole system prompt and tool
+        # list (thousands of tokens) on the first turn unless it already has
+        # them cached — see providers/llm_openai.warmup.
+        warm_llm = getattr(self._llm, "warmup", None)
+        if warm_llm is not None:
+            head = ([{"role": "system", "content": self._system}]
+                    if self._system else [])
+            jobs.append(warm_llm(head + [{"role": "user", "content": "."}],
+                                 self._tools, self._log))
         if jobs:
             await asyncio.gather(*jobs, return_exceptions=True)
 
