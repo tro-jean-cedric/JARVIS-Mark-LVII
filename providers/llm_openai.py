@@ -475,7 +475,12 @@ class OpenAICompatLLM:
         attention) cannot rewind a cache to an arbitrary point; Ollama keeps a
         resume point where two prompts DIVERGED, and the second request is what
         creates one exactly at the start of the user's message. `max_tokens: 1`
-        because nothing generated here is wanted. Hosted APIs are skipped: a
+        because nothing generated here is wanted.
+
+        Not every model gets the full benefit: qwen3.5:35b-a3b on a 36 GB Mac
+        kept no resume point at all (every NEW conversation start ~11 s, warm
+        or not — only prompts that extend the previous one hit the cache). For
+        it the warm-up still saves the model load. Hosted APIs are skipped: a
         request there costs money and their caches are not ours to fill.
         """
         if not _is_loopback(self.base) or not messages:
