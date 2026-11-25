@@ -436,6 +436,14 @@ class OpenAICompatLLM:
             # 2026-11-04: 3.5-flash first word ~2.4 s -> ~1.6 s at "low";
             # the Lite models answer as well with no thinking at all.
             body["reasoning_effort"] = "none" if "lite" in self.model else "low"
+        elif ":11434" in self.base:
+            # Ollama turns thinking ON by default for models that support it
+            # (qwen3, qwen3.5, gpt-oss, deepseek-r1…). Measured 2026-11-25 on
+            # qwen3.5:35b-a3b, M4 Max: a one-sentence answer took 5.5 s with
+            # thinking and 0.43 s without; a tool call 2.3 s vs 1.55 s, both
+            # calling the right tool. Ollama ignores this for models that
+            # cannot think, so it is safe to send to every model it serves.
+            body["reasoning_effort"] = "none"
         if "minimax" in self.base:
             # MiniMax's M2 models put their thinking inline as <think>…</think>
             # unless asked not to. The pipeline filters that out of speech, but
