@@ -81,6 +81,7 @@ instead. Otherwise **nothing in `providers/` is imported** — keep it that way
 - Each module declares `PROVIDER = {id, kind, label, factory, ...}`
   (`:297-312`); `validate()` returns a reason string, never raises. Heavy
   imports go **inside `factory()`**.
+- Voice providers include `tts_openai` (Kokoro / OpenAI / any /v1/audio/speech; raw 24 kHz PCM, WAV fallback).
 - `providers/registry.py`: modules are listed in `_MODULES` (`:35`) — **add new
   provider modules there**; `discover(kind)` runs only when the settings panel
   opens; `build()` (`:133`) caches by config fingerprint. Per-service ids look

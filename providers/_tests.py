@@ -1198,6 +1198,107 @@ async def test_claude_code():
     check("a missing command is reported, not raised", not res.ok and "not found" in res.error)
 
 
+async def test_openai_speech():
+    section("[21] OpenAI-compatible voice (Kokoro / OpenAI / any /v1/audio/speech)")
+    import io
+    import math
+    import struct
+    import wave
+    from providers import registry
+
+    def tone(rate: int, secs: float) -> bytes:
+        return b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / rate)))
+                        for i in range(int(rate * secs)))
+
+    seen = []
+
+    class Speech(BaseHTTPRequestHandler):
+        pcm_ok = True
+
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body: bytes, ctype: str):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path.endswith("/audio/voices"):
+                self._send(200, json.dumps({"voices": ["af_heart", "bm_george"]}).encode(),
+                           "application/json")
+            else:
+                self._send(404, b"{}", "application/json")
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append((self.server.server_port, body, self.headers.get("Authorization")))
+            if body.get("response_format") == "pcm":
+                if not self.server.pcm_ok:
+                    self._send(400, b'{"error": {"message": "unsupported response_format pcm"}}',
+                               "application/json")
+                    return
+                self._send(200, tone(24000, 0.5), "audio/pcm")
+                return
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(tone(16000, 0.5))
+            self._send(200, buf.getvalue(), "audio/wav")
+
+    servers = []
+    for pcm_ok in (True, False):
+        srv = HTTPServer(("127.0.0.1", 0), Speech)
+        srv.pcm_ok = pcm_ok
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        servers.append(srv)
+    try:
+        decl = registry.get_declaration("openai_tts")
+        check("listed as a voice provider", decl is not None and decl["kind"] == "tts")
+        kokoro = registry.build("openai_tts", {
+            "base_url": f"http://127.0.0.1:{servers[0].server_port}/v1",
+            "model": "kokoro", "voice": "af_heart"})
+
+        async def collect(tts, text="Hello there."):
+            return [p async for p in tts.speak(text)]
+
+        pieces = await collect(kokoro)
+        total = sum(len(p) for p in pieces)
+        check("raw PCM streams straight through, in pieces",
+              len(pieces) > 1 and total == 24000, (len(pieces), total))
+        check("model, voice and text sent as asked",
+              seen[-1][1] == {"model": "kokoro", "input": "Hello there.", "voice": "af_heart",
+                              "response_format": "pcm"}, seen[-1])
+        check("no key sent to a server that has none", seen[-1][2] is None)
+        check("the server's own voice list", kokoro.voices() == [("af_heart", "af_heart"),
+                                                                 ("bm_george", "bm_george")])
+        wav_only = registry.build("openai_tts", {
+            "base_url": f"http://127.0.0.1:{servers[1].server_port}", "voice": "x",
+            "api_key": "sk-test"})
+        pieces = await collect(wav_only)
+        total = sum(len(p) for p in pieces)
+        check("a server without raw PCM falls back to WAV, resampled to 24 kHz",
+              wav_only._format == "wav" and abs(total - 24000) <= 64, (wav_only._format, total))
+        check("the key is sent as a bearer token", seen[-1][2] == "Bearer sk-test", seen[-1][2])
+        n_before = len(seen)
+        await collect(wav_only, "Again.")
+        check("WAV is asked for directly after it was learned once",
+              len(seen) == n_before + 1 and seen[-1][1]["response_format"] == "wav")
+        ok, msg = kokoro.probe()
+        check(f"TEST reports what it heard ({msg})", ok and "0.5s" in msg)
+        dead = registry.build("openai_tts", {"base_url": "http://127.0.0.1:9/v1"})
+        ok, msg = dead.probe()
+        check("nothing listening -> says so plainly",
+              not ok and "is the voice server running" in msg, msg)
+    finally:
+        for srv in servers:
+            srv.shutdown()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 async def main() -> int:
     print("providers self-test")
@@ -1223,6 +1324,7 @@ async def main() -> int:
     # whose callback reaches widgets it has already deleted, and a slow test
     # after it gives the download time to land (a segfault, not a FAIL).
     await test_claude_code()
+    await test_openai_speech()
     test_panel_settings_survive()
 
     print(f"\n{'=' * 56}")
