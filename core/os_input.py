@@ -1319,13 +1319,33 @@ def _field_from(reader: Callable[[str], Any]) -> Optional[TextField]:
 
 
 def _mac_focused_element():
+    # Never ask the SYSTEM-WIDE element for AXFocusedUIElement: when our own
+    # window is focused, AppKit answers that question inside this process, on
+    # the calling (worker) thread, and walks Qt's accessibility tree off the
+    # Qt thread -> SIGSEGV in QAccessible::uniqueId (seen live, Nov 2026).
+    # Ask which app is focused (answered by the system), skip ourselves, and
+    # then ask THAT app's element, which can never be us.
     import ApplicationServices as AS
     sysw = AS.AXUIElementCreateSystemWide()
     try:
         AS.AXUIElementSetMessagingTimeout(sysw, 0.25)
     except Exception:
         pass
-    err, el = AS.AXUIElementCopyAttributeValue(sysw, "AXFocusedUIElement", None)
+    err, app = AS.AXUIElementCopyAttributeValue(sysw, "AXFocusedApplication", None)
+    if err != 0 or app is None:
+        return AS, None
+    try:
+        err, pid = AS.AXUIElementGetPid(app, None)
+    except Exception:
+        return AS, None
+    if err != 0 or not pid or int(pid) == os.getpid() or _is_own(int(pid)):
+        return AS, None
+    app = AS.AXUIElementCreateApplication(int(pid))
+    try:
+        AS.AXUIElementSetMessagingTimeout(app, 0.25)
+    except Exception:
+        pass
+    err, el = AS.AXUIElementCopyAttributeValue(app, "AXFocusedUIElement", None)
     if err != 0 or el is None:
         return AS, None
     try:
