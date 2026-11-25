@@ -38,7 +38,9 @@ PLUGIN = {
         "focus a type bar offers dictation and an air keyboard. Actions: start (turn it on), "
         "stop, status, dictate (`op` start|stop|send|undo: type what the user says into the "
         "focused text field), keyboard (show the air keyboard), help (the gestures). Use "
-        "start for 'control my computer with my hand', 'virtual mouse', 'air mouse'."
+        "start for 'air control' said on its own (and 'open/turn on air control'), 'control my "
+        "computer with my hand', 'virtual mouse', 'air mouse'; status only when asked whether it "
+        "is on."
     ),
     "brief": "Hand-controlled mouse over the whole computer: start / stop / dictate / keyboard / help.",
     "behavior": "NON_BLOCKING",
@@ -46,7 +48,8 @@ PLUGIN = {
         "type": "OBJECT",
         "properties": {
             "action": {"type": "STRING",
-                       "description": "start, stop, status, dictate, keyboard or help"},
+                       "description": "start (the default: a bare 'air control' means start), stop, "
+                                      "status, dictate, keyboard or help"},
             "op": {"type": "STRING",
                    "description": "for dictate: start, stop, send (press Enter) or undo "
                                   "(remove the last phrase)"},
