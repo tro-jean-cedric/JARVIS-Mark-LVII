@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import platform
 import re
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -192,8 +193,50 @@ def _diagnose(player) -> list[str]:
     return facts
 
 
+_check_running = threading.Event()
+
+
+def _full_check(player) -> str:
+    """Run core/selftest.py on a thread (it takes several seconds); the
+    report is shown on screen and a short summary spoken when it is done."""
+    from core import outcome
+    if _check_running.is_set():
+        return outcome.started("assistant_help", what="the full check is already running")
+    _check_running.set()
+
+    def work():
+        try:
+            from core import selftest
+            results = selftest.run(network=True)
+            report = "\n".join(r.line() for r in results)
+            print("[SelfTest]\n" + report)
+            if player is not None:
+                try:
+                    player.show_content("SELF-CHECK", report)
+                except Exception:
+                    pass
+                say = getattr(player, "request_say", None)
+                if callable(say):
+                    say("The full check of this computer has finished. Tell the user the "
+                        "result briefly, in their language, naming each problem and its fix "
+                        "in plain words (the full list is on screen): "
+                        + selftest.summary(results))
+        except Exception as e:
+            print(f"[SelfTest] could not run: {e}")
+        finally:
+            _check_running.clear()
+
+    threading.Thread(target=work, daemon=True, name="selftest").start()
+    return outcome.started("assistant_help",
+                           what="a full check of this computer (about ten seconds)",
+                           next="let the user know briefly that the check is running; "
+                                "its result appears on screen and is announced by itself")
+
+
 def assistant_help(parameters: dict, player=None) -> str:
     p = parameters or {}
+    if p.get("full_check"):
+        return _full_check(player)
     question = str(p.get("question") or p.get("topic") or "").strip()
     diagnose = bool(p.get("diagnose"))
 
@@ -219,7 +262,8 @@ TOOL = {
         "Your own manual and a live check of yourself. Call it whenever the user asks about "
         "YOU - what you are, who made you, what you can do, how a feature or plugin is set "
         "up, where a setting is, privacy, the phone dashboard - and whenever they say "
-        "something of yours does not work (then with diagnose=true). Never answer such "
+        "something of yours does not work (then with diagnose=true; full_check=true when they "
+        "ask for a full self-check or the quick one does not explain it). Never answer such "
         "questions from general knowledge or say you are 'just an AI'."
     ),
     "brief": "Your own manual (features, settings, privacy, troubleshooting); diagnose=true adds a live check.",
@@ -232,6 +276,13 @@ TOOL = {
             "diagnose": {"type": "BOOLEAN",
                          "description": "true when something is not working: adds a live check "
                                         "(API key, engine, audio devices, camera, plugins, errors)"},
+            "full_check": {"type": "BOOLEAN",
+                           "description": "true when the user asks for a full self-check / "
+                                          "self-test of the computer, or diagnose did not explain "
+                                          "a problem: tests that libraries, HTTPS, the key, "
+                                          "browser automation, video tools, audio, speaker "
+                                          "capture, wake word and screen access really work, "
+                                          "and says what to fix. Runs in the background."},
         },
     },
     "handler": assistant_help,

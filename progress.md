@@ -25,6 +25,7 @@ Status: ✅ done · 🟡 partly done · ⬜ to do · ⛔ out of scope
 
 | Feature | Where | Commit |
 |---|---|---|
+| Capability self-test: 15 checks that the things features rely on really work on this computer (Python, packages for this OS and their versions, native libraries load, language detection, HTTPS roots + a real HTTPS connection, the Gemini key answers, Playwright's browser, yt-dlp + ffmpeg, microphone/speakers, capturing the computer's sound, the local engine's speech detector on synthetic audio, the wake-word model on silence, screen/accessibility permissions, app files, every action and plugin loads), each with a plain fix. `python -m core.selftest [--offline] [names]`; by voice through `assistant_help` `full_check=true` (background; report on screen, summary spoken) | `core/selftest.py`, `actions/assistant_help.py` | COMMIT |
 | Instant "on it" lines + see-or-do check: three very short lines per language written once by the model, recorded once in the assistant's own Live voice (`gemini.say_audio`, transcript checked) and played from the speaker queue when a tool is still running after 1.2 s (once per user turn, never over speech, Gemini Live only, mic released after); before a screenshot, the user's words are judged alongside the capture and a request one picture cannot answer is sent to the right feature instead (**off by default**, `"see_or_do": true`: right on every request tried, but +1.2-1.9 s on every look and its fast model often refused under load) | `core/on_it.py`, `core/see_or_do.py`, `core/gemini.py`, `main.py` | `e056db5` |
 | App controls without the mouse: press, toggle, set text, set a number, list and choose drop-down entries through the accessibility interface (macOS AX, Windows UIA, Linux AT-SPI), on windows in the background; every change read back; secret fields and disabled controls refused. `app_control` tries it first (new toggle / set / options / choose actions), `screen_agent` quick steps too. Tested for real on macOS (Qt + native AppKit test windows, Calculator). Also fixed: Qt password fields on macOS were not recognised as secret (`core/screenview.py`) | `core/uiact.py`, `actions/app_control.py`, `plugins/screen_agent.py`, `core/screenview.py` | `40cd700` |
 | Screen-agent eyes: numbered tags on what can be pressed (accessibility controls + OpenCV shapes, none inside photos or on panels), wait until the pixels settle while ignoring what keeps moving, spinners / videos reported as still moving, change measured right where a step acted. Not ported: snapping an x/y click onto the nearest shape (the existing closer look covers most of it) | `plugins/_screen_eyes.py`, `plugins/_screen_loop.py`, `plugins/screen_agent.py` (setting) | `7aa1c0b` |
@@ -84,24 +85,20 @@ built-in actions.
 Evidence = line numbers in the Torvis string dump used for the comparison
 (regenerate it as described in `TORVIS_PORT_PROMPT.md`).
 
-1. **Capability self-test** — one command / voice request that checks
-   languages, TLS, Playwright, yt-dlp, speaker capture, VAD and wake-word
-   models and says what is missing. *Small–medium.* Evidence: `core.selftest`
-   (~3293045–3293461). Extends `assistant_help`'s diagnose.
-2. **Numbers said as words for local voices** — numbers, dates, times,
+1. **Numbers said as words for local voices** — numbers, dates, times,
    ranges, money, units, phone numbers and sums spelled out in the user's
    language before Piper / system voices read them; cache short replies.
    *Medium*, needs `babel` (new dependency — ask first). Evidence:
    `providers._numbers`, `_speakable` (~3857518–3858394). Target:
    `providers/engine_pipeline.py` `_speakable`.
-3. **Desktop notifications** — `notify-send` / macOS / Windows toast for
+2. **Desktop notifications** — `notify-send` / macOS / Windows toast for
    finished tasks and reminders. *Small.* Evidence: `core.notify`.
-4. **Brave Search with the user's own key** — an extra web-search source.
+3. **Brave Search with the user's own key** — an extra web-search source.
    *Small.* Evidence: `core.brave` (~3265044).
-5. **Plugin sandbox** — user-added plugins run in a separate host process with
+4. **Plugin sandbox** — user-added plugins run in a separate host process with
    an allow-list of libraries. *Medium.* Evidence: `core.script_host`
    (~3292662–3292892). Target: `core/plugin_loader.py`.
-6. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+5. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
     providers, connected_apps OAuth, planet_watch (large — split it), the rest.
 
 ---
@@ -128,6 +125,7 @@ Things built and tested in code but never tried for real:
 - the screen agent with the new tags on a real task: that the model answers with tag numbers and the tags land on the right things in other programs, on Windows and Linux, and with Accessibility granted on macOS
 - app controls without the mouse on Windows (UI Automation) and Linux (AT-SPI): written, never run; and on macOS with real apps beyond the test windows and Calculator. Known limit: Qt drop-downs on macOS ignore every accessibility way of choosing an entry (reported as such; the screen agent then uses the pointer)
 - the "on it" line heard by a person (the queue and the transcript were checked, the sound itself was not listened to), and with the local voice engine (switched off there by design)
+- the self-check asked for by voice in the running app (the voice path is covered by the self-test; the in-app attempt was stopped because the screen had locked with the test copy's microphone open); the checks on Windows and Linux
 - the items listed under "Not verified on real hardware/accounts" in
   `TORVIS_PARITY.md`
 
@@ -135,6 +133,7 @@ Things built and tested in code but never tried for real:
 
 ## Log
 
+- 2026-11-25 — Capability self-test ✅ (`core/selftest.py`). Run for real on this Mac: offline 13 pass + speaker capture "not set up" (needs BlackHole) in 2 s; with the network, HTTPS verified, the key answered, Playwright's Chrome found. Self-test `python -m core._selftest_tests`. Wording check: 0 overlaps.
 - 2026-11-25 — "On it" lines + see-or-do ✅. Run for real: English and French lines written and recorded (transcripts match the text), see/do verdicts right on every request tried with the app's 62 features once tuned (a first version refused to look at "what's on my screen right now?" — found in the running app, fixed), and in the running app a web search of 8.8 s got "Working on it." played while it ran, after the first request in English had prepared the lines in the background. See-or-do ships off by default: +1.2-1.9 s per look, and the fast model it needs kept answering 503. Self-test `python -m core._on_it_tests [--live]`. Wording check: 0 overlaps in new text.
 - 2026-11-25 — App controls without the mouse ✅ (`core/uiact.py`). Run for real on macOS: Qt and native AppKit test windows in the background (native: 22/22, incl. choosing a pop-up entry; Qt: all but choosing, which Qt ignores and is reported honestly), Calculator 7+5=12 in the background. Then the whole app was run: a request typed into JARVIS ("In Calculator, press the 7 button") made Calculator show 7 while it stayed in the background, and JARVIS said so; no errors in the app's log. The live run found and fixed: Qt password fields not flagged as secret (also in screenview), slider values given as text, Qt pop-up open/close. Self-test `python -m core._uiact_tests [--live]`. Wording check: 0 overlaps in new text.
 - 2026-11-25 — Screen-agent eyes (to-do #1 after the router) ✅: tags, pixel settle with moving-area detection, change at the acted point. Real screenshot of a macOS IDE without accessibility data: 60 sensible tags from shapes alone in 0.02 s. Self-test `python -m plugins._screen_eyes_tests`. Wording check: 0 overlaps in new text.
