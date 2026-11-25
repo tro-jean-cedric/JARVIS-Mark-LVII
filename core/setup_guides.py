@@ -261,6 +261,9 @@ GUIDES: dict[str, dict] = {
             "takes a few pictures. Only numbers describing your face are kept, on this computer.",
             "To lock at every start: type an UNLOCK PIN first (used if the camera can't see you), "
             "then switch on LOCK AT EVERY START. Press SAVE.",
+            "While it scans or is locked, the middle of the screen shows the camera with a box "
+            "round each face (green: you, red: someone else). Switch off SHOW THE CAMERA ON THE "
+            "HUD to keep the avatar there instead.",
         ],
         "done": "Say \"lock\" — it unlocks by itself when it sees you, or with \"unlock\" and your PIN.",
     },
