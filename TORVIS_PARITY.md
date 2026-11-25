@@ -105,7 +105,7 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 | Suggest a feature / Report a problem | ⛔ | Sends to Torvis's developer |
 | Phone via Telegram bot (own BotFather token) | ✅ | `plugins/telegram_remote.py` |
 | Phone control safety (confirm risky steps on phone) | ✅ | Two-step Yes/No buttons on the phone for `core.confirm` requests from a phone turn |
-| Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | 🟡 | `actions/remote_mode.py` + `core/remote_mode.py`: keep awake, lock when idle, screen off, hibernate (confirm), WoL info/setup/send; phone `/awake`, `/hibernate`. Sleep now and wake by itself at a time (`core/park.py`, Torvis `core.park`, which was Windows only): Windows wake timer, Linux rtcwake, macOS pmset (both need administrator rights for the wake), resume judged from the wall clock (on time / woken by something else / timer ignored); Remote Mode section in ⚙ PLUGIN SETTINGS with APPLY NOW. "Lock when screen off" is idle-based; no smart-plug switching; no automatic Windows WoL setup |
+| Remote Mode (keep awake, hibernate, Wake-on-LAN, smart plug) | 🟡 | `actions/remote_mode.py` + `core/remote_mode.py`: keep awake, lock when idle, screen off, hibernate (confirm), WoL info/setup/send; phone `/awake`, `/hibernate`. Sleep now and wake by itself at a time (`core/park.py`, Torvis `core.park`, which was Windows only): Windows wake timer, Linux rtcwake, macOS pmset (both need administrator rights for the wake), resume judged from the wall clock (on time / woken by something else / timer ignored); Remote Mode section in ⚙ PLUGIN SETTINGS with APPLY NOW. Smart plug (`core/smart_plug.py`; Torvis switched plugs through its own relay, here the user's own keys are used from the self-hosted server): Shelly Cloud v2, Tuya cloud project, Voice Monkey v3; off-then-on only after a double yes on the phone and only without Wake-on-LAN / wake URL. Torvis also had SwitchBot and Home Assistant plugs — not ported. "Lock when screen off" is idle-based; no automatic Windows WoL setup |
 | Shared webcam for HUD preview + plugins | ✅ | `gui/window.py` camera preview now uses `plugins/_camera.py` |
 | Choose the camera by name, next to microphone and speakers (0.6.0) | ✅ | 🎧 AUDIO & CAMERA panel: WEBCAM row lists cameras by real name (Qt `QMediaDevices`) + Automatic; TEST opens it via OpenCV and reports size / black picture / no permission; name re-matched when indexes move; APPLY restarts the shared stream (`_camera.restart()`) without a reconnect |
 | Open the program the user means: installed-apps list + model pick (Torvis `core.installed_apps`) | ✅ | `core/installed_apps.py`: macOS .app bundles, Windows Get-StartApps, Linux .desktop (Flatpak/Snap); exact name, unique word match, else a model pick that must be on the list (never a similar but different program); `open_app` launches that exact program and verifies by its real name |
@@ -156,6 +156,8 @@ Status legend: ✅ done · 🟡 partial (works, reduced scope — see note) ·
 - 2026-11-25 — Plugin sandbox (`core/script_host.py`, `core/plugin_sandbox.py`, self-test `python -m core._sandbox_tests`).
 
 - 2026-11-25 — Remote Mode: sleep-then-wake (`core/park.py`) and its settings section (self-test `python -m core._park_tests`).
+
+- 2026-11-25 — Remote Mode: the smart plug (`core/smart_plug.py`, self-test `python -m core._plug_tests`).
 
 ## Totals (2026-11-24)
 

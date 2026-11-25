@@ -42,3 +42,10 @@ screen). It answers Telegram, runs tasks and routines, and syncs with the deskto
   `HeadlessPlayer` (`:1577`) stands in for the UI.
 - The desktop side (`plugins/cloud_agent.py`, `plugins/telegram_remote.py`)
   is referenced but not present in this checkout.
+- Waking the desktop (`home_computer` wake): Wake-on-LAN or a wake URL
+  (`send_wake`) first; otherwise the smart plug (`core/smart_plug.py`, the
+  user's own Shelly / Tuya / Voice Monkey keys synced from CLOUD AGENT as
+  `WAKE_PLUG_KEYS`). The plug cuts the power, so it runs only through
+  `core.confirm`: `Runtime.__init__` binds confirm to the phone, and the
+  Telegram bridge shows Yes / Yes for it on the server even without
+  `phone_control`. Success is the desktop checking in (`watch_wake`).

@@ -107,7 +107,7 @@ WORKSPACE = BASE_DIR / "workspace"
 MANIFEST = (
     "core/__init__.py", "core/cloud.py", "core/action_loader.py", "core/confirm.py",
     "core/gemini.py", "core/lazyimport.py", "core/outcome.py", "core/plugin_loader.py",
-    "core/prompt.txt", "core/undo.py",
+    "core/prompt.txt", "core/undo.py", "core/smart_plug.py",
     # the engines both bodies run
     "core/tasks/__init__.py", "core/tasks/agents.py", "core/tasks/brain.py",
     "core/tasks/desktop.py", "core/tasks/engine.py", "core/tasks/research.py",
@@ -392,11 +392,31 @@ def magic_packet(mac: str) -> bytes:
     return b"\xff" * 6 + bytes.fromhex(normalise_mac(mac).replace(":", "")) * 16
 
 
-def wake_configured(cfg: dict) -> bool:
+def signal_configured(cfg: dict) -> bool:
+    """Wake-on-LAN or a wake URL: harmless if the computer is already on."""
     cfg = cfg or {}
     return bool(str(cfg.get("wake_url") or "").strip()
                 or (str(cfg.get("wake_mac") or "").strip()
                     and str(cfg.get("wake_host") or "").strip()))
+
+
+def plug_configured(cfg: dict) -> bool:
+    """A smart plug (core/smart_plug.py): cuts the power first, so only after
+    the user confirmed, and only when no harmless way is set up."""
+    try:
+        from core import smart_plug
+        return smart_plug.configured(cfg or {})
+    except Exception:
+        return False
+
+
+WAKE_PLUG_KEYS = ("plug_kind", "shelly_host", "shelly_auth_key", "shelly_device_id",
+                  "shelly_channel", "tuya_region", "tuya_client_id", "tuya_secret",
+                  "tuya_device_id", "voicemonkey_token", "voicemonkey_device")
+
+
+def wake_configured(cfg: dict) -> bool:
+    return signal_configured(cfg) or plug_configured(cfg)
 
 
 def send_wake(cfg: dict) -> str:
@@ -1047,7 +1067,8 @@ _DECLS = [
      "parameters": {"type": "OBJECT", "properties": {"query": {"type": "STRING"}}}},
     {"name": "home_computer",
      "description": "The one bridge to the user's own computer. status = is it on, can it be "
-                    "woken; wake = turn it on remotely; command = hand a request to the assistant "
+                    "woken; wake = turn it on remotely (when only a smart plug can do it, the user first "
+                    "says yes on the phone, because the plug cuts the power); command = hand a request to the assistant "
                     "on that computer, which does it there and answers (apps, Steam, its files, "
                     "anything on that machine) — woken first if it is off; screenshot = a picture "
                     "of its screen; system = its CPU/RAM/GPU readout.",
@@ -1246,6 +1267,8 @@ class ToolBox:
         if action == "wake":
             if info["online"]:
                 return outcome.done("home_computer", note="it is already on and connected")
+            if not signal_configured(wake_cfg) and plug_configured(wake_cfg):
+                return self._ask_plug_cycle(wake_cfg, chat)
             sent = send_wake(wake_cfg)
             self.rt.watch_wake(chat)
             return outcome.started("home_computer", what="wake signal sent", detail=sent,
@@ -1262,6 +1285,12 @@ class ToolBox:
         if not info["online"]:
             if not can_wake:
                 return outcome.failed("home_computer", "the computer is off and waking it is not set up")
+            if not signal_configured(wake_cfg):
+                # Only a smart plug: nothing is queued behind a power cut the
+                # user has not agreed to. Ask; the request comes again once it is on.
+                asked = self._ask_plug_cycle(wake_cfg, chat)
+                return asked + (" The request itself was NOT queued: once the computer is "
+                                "on, the user sends it again.")
             woke = send_wake(wake_cfg)
             self.rt.watch_wake(chat)
         cmd = self.state.queue_command(action, text=text, chat=chat)
@@ -1270,6 +1299,28 @@ class ToolBox:
                                what=f"{action} queued, computer waking" if woke else f"{action} sent",
                                detail=woke or None,
                                note="the desktop's answer goes to the user directly; do not repeat it")
+
+    def _ask_plug_cycle(self, wake_cfg: dict, chat) -> str:
+        """Switch the computer's smart plug off and on — behind core.confirm,
+        answered with the Telegram bridge's Yes / Yes buttons. A computer
+        that is actually still running (only the assistant was closed) loses
+        its power."""
+        from core import confirm, outcome, smart_plug
+
+        if confirm.pending_title():
+            return outcome.failed("home_computer", "another confirmation is already waiting on the phone")
+        rt = self.rt
+
+        def go() -> str:
+            ok, text = smart_plug.cycle(wake_cfg)
+            if ok:
+                rt.watch_wake(chat)
+                return text + "; waiting for the computer to check in"
+            return text
+        return confirm.request(
+            "cloud.plug_cycle", "Switch the computer's smart plug off and on to start it",
+            f"Uses {smart_plug.describe(wake_cfg)}. A computer that is actually still running "
+            f"loses its power.", go, surface="phone")
 
     def _t_cloud_jobs(self, a, ctx):
         from core import outcome
@@ -1960,6 +2011,16 @@ class Runtime:
         self.workspace = Path(workspace or WORKSPACE)
         self.player = HeadlessPlayer()
         self.telegram = TelegramFront(self, self.player)
+        # The server's only interface for core.confirm is the phone: the
+        # Telegram bridge turns a waiting confirmation into Yes / No buttons.
+        # Without this binding confirm.request refuses everything here.
+        try:
+            from core import confirm
+            if confirm._show_cb is None:
+                confirm.bind(lambda title, _detail: self.log(f"SYS: asking the phone — {title}"),
+                             lambda: None, self.log)
+        except Exception as e:
+            self.log(f"SYS: confirmations unavailable — {e}")
         self.toolbox = ToolBox(self.state, self, self.workspace)
         self.brain = Brain(self.toolbox, self.log)
         self.stop = threading.Event()
@@ -2555,7 +2616,8 @@ class Runtime:
             tg_out = {"allowed_chat_ids": values["allowed_chat_ids"]}
 
         if isinstance(s.get("wake"), dict):
-            w = {k: s["wake"].get(k) for k in ("wake_mac", "wake_host", "wake_port", "wake_url")}
+            w = {k: s["wake"].get(k) for k in ("wake_mac", "wake_host", "wake_port", "wake_url",
+                                                 *WAKE_PLUG_KEYS)}
             self.state.wake_cfg.update(lambda d: (d.clear(), d.update(w)))
 
         if isinstance(body.get("memory"), dict):

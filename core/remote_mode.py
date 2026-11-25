@@ -344,10 +344,16 @@ def wol_settings() -> dict:
         cfg = get_plugin_config("cloud_agent")
     except Exception:
         cfg = {}
+    try:
+        from core import smart_plug
+        plug = smart_plug.configured(cfg)
+    except Exception:
+        plug = False
     return {"wake_mac": str(cfg.get("wake_mac") or "").strip(),
             "wake_host": str(cfg.get("wake_host") or "").strip(),
             "wake_port": str(cfg.get("wake_port") or "9").strip(),
-            "wake_url": str(cfg.get("wake_url") or "").strip()}
+            "wake_url": str(cfg.get("wake_url") or "").strip(),
+            "plug": plug}
 
 
 def save_wol_settings(mac: str = None, host: str = None, port=None, url: str = None) -> tuple[bool, str]:
@@ -415,7 +421,7 @@ def status() -> dict:
         "locking_now": bool(_idle["thread"] is not None and _idle["thread"].is_alive()),
         "hibernate_supported": hibernate_command() is not None,
         "mac": w["wake_mac"] or mac_address(), "wol_host": w["wake_host"],
-        "wol_port": w["wake_port"], "wake_url": bool(w["wake_url"]),
+        "wol_port": w["wake_port"], "wake_url": bool(w["wake_url"]), "plug": w["plug"],
     }
 
 
@@ -428,6 +434,8 @@ def status_text() -> str:
             f"MAC {st['mac'] or 'unknown'}"]
     if st["wol_host"] or st["wake_url"]:
         bits.append("cloud wake is set up")
+    elif st["plug"]:
+        bits.append("the server can start it with the smart plug (after a yes on the phone)")
     return "Remote Mode: " + "; ".join(bits) + "."
 
 

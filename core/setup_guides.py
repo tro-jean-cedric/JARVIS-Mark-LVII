@@ -140,6 +140,9 @@ GUIDES: dict[str, dict] = {
             "Paste the code into PAIRING CODE FROM YOUR SERVER. Choose what to share (Gemini key, "
             "memory, Telegram on the server). Press SAVE.",
             "Press CHECK CONNECTION.",
+            "Optional: so the server can start this computer when it is completely off, fill in "
+            "Wake-on-LAN, a wake URL, or the smart plug it is plugged into (say \"how do I set up "
+            "the smart plug\").",
         ],
         "done": "Say \"cloud status\", or \"remind me every Monday at 9 to water the plants\" — "
                 "repeating reminders reach your phone even when this computer is off.",
@@ -358,6 +361,36 @@ EXTRA_GUIDES: dict[str, dict] = {
                 "\"results from Brave\" when it was used.",
         "note": "Without a key nothing changes: searches use Gemini and DuckDuckGo as before. "
                 "If Brave fails or the monthly allowance runs out, those take over by themselves.",
+    },
+    "smart_plug": {
+        "title": "Smart plug — let the server start this computer",
+        "aliases": ["smart plug", "plug", "shelly", "tuya", "smart life", "voice monkey",
+                    "voicemonkey", "alexa", "power on"],
+        "time": "about 15 minutes",
+        "need": "The cloud agent set up, and the computer plugged into a Shelly or Tuya / Smart "
+                "Life plug (or any plug an Alexa routine can switch).",
+        "steps": [
+            "In the computer's BIOS / UEFI, set what happens when power comes back to 'Power On' "
+            "(often called Restore on AC power loss or AC Back). Without it the plug cannot start "
+            "the computer.",
+            "Shelly: in the Shelly app, Settings → Authorization cloud key gives the server name "
+            "(…shelly.cloud) and the key; the plug's device ID is under its Settings → Device "
+            "information. Fill in the SHELLY fields of CLOUD AGENT.",
+            ("Tuya / Smart Life: create a cloud project on the Tuya IoT platform, link your Smart "
+             "Life app account to it (Devices → Link app account), then copy its Access ID, Access "
+             "Secret, data centre and the plug's device ID into the TUYA fields.",
+             "https://iot.tuya.com/"),
+            ("Voice Monkey: make a trigger device, and in the Alexa app a routine started by it "
+             "that switches the plug off, waits about ten seconds and switches it on. Put the API "
+             "token and the device name in the VOICE MONKEY fields.", "https://voicemonkey.io/"),
+            "Choose the service in SMART PLUG, press SAVE, then CHECK CONNECTION: it checks the "
+            "keys and the plug without switching it.",
+        ],
+        "done": "From the phone, while this computer is off: \"turn on my computer\". The server "
+                "asks you twice before it cuts the power and turns it back on, then tells you when "
+                "the computer is back.",
+        "note": "Wake-on-LAN and a wake URL are tried instead of the plug when they are set up, "
+                "because they cannot cut the power of a computer that is still on.",
     },
     "remote_mode": {
         "title": "Remote Mode — keep awake, hibernate, Wake-on-LAN",

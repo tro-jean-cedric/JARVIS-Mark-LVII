@@ -931,7 +931,11 @@ def _watch_loop(gen: int) -> None:
                 _state["turn_open"] = False
             title = ops.pending_confirmation() if ops else ""
             asked = next((a for a in _asks.values() if a["title"] == title), None) if title else None
-            if title and asked is None and _turn_active() and _on(_cfg(), "phone_control"):
+            # On the cloud server the phone is the only interface, so its
+            # confirmations (core/cloud.py: the smart-plug wake) are always
+            # asked here; on the desktop only when phone control is allowed.
+            phone_may_answer = _on(_cfg(), "phone_control") or _headless(_relay.get("player"))
+            if title and asked is None and _turn_active() and phone_may_answer:
                 nonce = next(_nonce)
                 chat = _state.get("turn_chat")
                 _asks[nonce] = {"title": title, "chat": chat, "at": time.time()}

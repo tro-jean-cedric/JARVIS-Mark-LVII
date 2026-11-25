@@ -90,8 +90,27 @@ PLUGIN = {
 }
 
 
+def _plug_line(values: dict) -> tuple[bool, str]:
+    """The smart plug's part of CHECK CONNECTION — never switches it (from
+    here, switching it off would cut this computer's own power)."""
+    kind = str((values or {}).get("plug_kind") or "").strip().lower()
+    if kind in ("", "none"):
+        return True, ""
+    try:
+        from core import smart_plug
+        return smart_plug.check(values)
+    except Exception as e:
+        return False, f"Smart plug: could not be checked ({type(e).__name__})."
+
+
 def _test_connection(values: dict):
     """The settings screen's CHECK button: (ok, message)."""
+    plug_ok, plug = _plug_line(values)
+    ok, text = _test_link(values)
+    return ok and plug_ok, (text + (" " + plug if plug else "")).strip()
+
+
+def _test_link(values: dict):
     code = str((values or {}).get("pair_code") or "").strip()
     if not code:
         return False, "Paste the pairing code your server printed (python -m core.cloud --pair-code)."
@@ -149,11 +168,39 @@ PLUGIN_SETTINGS = {
          "placeholder": "empty = detected automatically"},
         {"key": "wake_url", "label": "OR a URL that wakes this computer (smart plug, Home Assistant…)",
          "type": "text"},
+        {"key": "plug_kind", "label": "OR the smart plug this computer is plugged into (used only "
+         "when nothing above is set, and only after you say yes on the phone: it cuts the power, "
+         "then turns it back on)", "type": "choice",
+         "options": ["none", "shelly", "tuya", "voicemonkey"], "default": "none"},
+        {"key": "shelly_host", "label": "Shelly: cloud server (Shelly app → Settings → Authorization "
+         "cloud key)", "type": "text", "placeholder": "shelly-…-eu.shelly.cloud"},
+        {"key": "shelly_auth_key", "label": "Shelly: authorization cloud key", "type": "password"},
+        {"key": "shelly_device_id", "label": "Shelly: device ID (device → Settings → Device information)",
+         "type": "text"},
+        {"key": "shelly_channel", "label": "Shelly: channel (0 for a single plug)", "type": "text",
+         "default": "0"},
+        {"key": "tuya_region", "label": "Tuya: data centre of your cloud project", "type": "choice",
+         "options": ["eu", "eu-w", "us", "us-e", "in", "cn", "sg"], "default": "eu"},
+        {"key": "tuya_client_id", "label": "Tuya: Access ID of your cloud project", "type": "text"},
+        {"key": "tuya_secret", "label": "Tuya: Access Secret", "type": "password"},
+        {"key": "tuya_device_id", "label": "Tuya: the plug's device ID", "type": "text"},
+        {"key": "voicemonkey_token", "label": "Voice Monkey: API token", "type": "password"},
+        {"key": "voicemonkey_device", "label": "Voice Monkey: the trigger device whose Alexa routine "
+         "switches the plug off and on", "type": "text"},
     ],
     "action": {"label": "CHECK CONNECTION", "run": _test_connection},
 }
 
 _DEFAULTS = {f["key"]: f.get("default", "") for f in PLUGIN_SETTINGS["fields"]}
+
+
+def _plug_keys() -> tuple:
+    """The smart-plug settings the server needs to switch the plug
+    (core/cloud.py WAKE_PLUG_KEYS; they travel over the pinned link only)."""
+    try:
+        return tuple(_cloud_mod().WAKE_PLUG_KEYS)
+    except Exception:
+        return ()
 _BRIEF_KEYS = ("enabled", "times", "days", "city", "topics", "extra", "length", "language")
 
 _link: dict = {"client": None, "thread": None, "online": False, "last_contact": 0.0, "error": "",
@@ -415,6 +462,8 @@ def _sync() -> str:
                         "wake_host": str(cfg.get("wake_host") or "").strip(),
                         "wake_port": str(cfg.get("wake_port") or "9").strip(),
                         "wake_url": str(cfg.get("wake_url") or "").strip()}
+    for key in _plug_keys():
+        settings["wake"][key] = str(cfg.get(key) or _DEFAULTS.get(key) or "").strip()
     # The briefing goes up only when it was changed HERE since the last sync;
     # otherwise the server's copy (perhaps changed from the phone) stands.
     local = _briefing_local(cfg)
