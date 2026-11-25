@@ -25,6 +25,7 @@ Status: ✅ done · 🟡 partly done · ⬜ to do · ⛔ out of scope
 
 | Feature | Where | Commit |
 |---|---|---|
+| Desktop notifications: the system's own banner when a background task finishes or fails, or a reminder fires, while the user is in another window (none when JARVIS is in front): macOS osascript (text passed as arguments, never as code), Linux notify-send, Windows win10toast in a child process. Setting `desktop_notifications` (on). Seen by the user on macOS | `core/notify.py`, `core/tasks/desktop.py`, `main.py`, `core/selftest.py` | COMMIT |
 | Numbers said as words for local voices: numbers, decimals, grouped thousands, negatives, money (symbols and codes, CFA francs included), units and percentages (CLDR names per language), dates (ISO and the locale's numeric form), clock times, phone numbers, version numbers, ranges and sums, English ordinals - spelt out in the user's language before Piper / system / OpenAI-compatible voices read them (ElevenLabs is left alone). The words for ranges, sums and clock times are written once per language by the model and cached (English built in). Results cached in memory. Not ported: caching the recorded audio of short replies (Torvis `_voice_cache`). New dependencies `babel` + `num2words` (approved) | `providers/_numbers.py`, `providers/_speakable.py`, `providers/engine_pipeline.py`, `core/selftest.py` | `350aa78` |
 | Capability self-test: 15 checks that the things features rely on really work on this computer (Python, packages for this OS and their versions, native libraries load, language detection, HTTPS roots + a real HTTPS connection, the Gemini key answers, Playwright's browser, yt-dlp + ffmpeg, microphone/speakers, capturing the computer's sound, the local engine's speech detector on synthetic audio, the wake-word model on silence, screen/accessibility permissions, app files, every action and plugin loads), each with a plain fix. `python -m core.selftest [--offline] [names]`; by voice through `assistant_help` `full_check=true` (background; report on screen, summary spoken) | `core/selftest.py`, `actions/assistant_help.py` | `c26a00b` |
 | Instant "on it" lines + see-or-do check: three very short lines per language written once by the model, recorded once in the assistant's own Live voice (`gemini.say_audio`, transcript checked) and played from the speaker queue when a tool is still running after 1.2 s (once per user turn, never over speech, Gemini Live only, mic released after); before a screenshot, the user's words are judged alongside the capture and a request one picture cannot answer is sent to the right feature instead (**off by default**, `"see_or_do": true`: right on every request tried, but +1.2-1.9 s on every look and its fast model often refused under load) | `core/on_it.py`, `core/see_or_do.py`, `core/gemini.py`, `main.py` | `e056db5` |
@@ -86,14 +87,12 @@ built-in actions.
 Evidence = line numbers in the Torvis string dump used for the comparison
 (regenerate it as described in `TORVIS_PORT_PROMPT.md`).
 
-1. **Desktop notifications** — `notify-send` / macOS / Windows toast for
-   finished tasks and reminders. *Small.* Evidence: `core.notify`.
-2. **Brave Search with the user's own key** — an extra web-search source.
+1. **Brave Search with the user's own key** — an extra web-search source.
    *Small.* Evidence: `core.brave` (~3265044).
-3. **Plugin sandbox** — user-added plugins run in a separate host process with
+2. **Plugin sandbox** — user-added plugins run in a separate host process with
    an allow-list of libraries. *Medium.* Evidence: `core.script_host`
    (~3292662–3292892). Target: `core/plugin_loader.py`.
-4. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
+3. The 🟡 gaps above, roughly in this order: Remote Mode additions, voice
     providers, connected_apps OAuth, planet_watch (large — split it), the rest.
 
 ---
@@ -122,6 +121,7 @@ Things built and tested in code but never tried for real:
 - the "on it" line heard by a person (the queue and the transcript were checked, the sound itself was not listened to), and with the local voice engine (switched off there by design)
 - the self-check asked for by voice in the running app (the voice path is covered by the self-test; the in-app attempt was stopped because the screen had locked with the test copy's microphone open); the checks on Windows and Linux
 - numbers as words heard by a person with Piper / Kokoro in languages other than French (checked here by transcribing a French Piper voice with Whisper, and the Mac's German system voice); the learnt words for languages other than German, French and Spanish
+- desktop notifications on Windows (win10toast in a child process) and Linux (notify-send); a reminder or a finished task triggering one in the running app
 - the items listed under "Not verified on real hardware/accounts" in
   `TORVIS_PARITY.md`
 
@@ -129,6 +129,7 @@ Things built and tested in code but never tried for real:
 
 ## Log
 
+- 2026-11-25 — Desktop notifications ✅ (`core/notify.py`). Real banner on this Mac, screenshot taken and seen by the user; a message built to break out of AppleScript was shown as plain text and ran nothing. Self-test `python -m core._notify_tests [--live]`; `notifications` check in `core.selftest`. Wording check: 0 overlaps.
 - 2026-11-25 — Numbers said as words ✅ (`providers/_speakable.py`, babel + num2words added with approval). Heard for real: a French Piper voice, transcribed by Whisper, dropped the minus of "-3 °C", said "F" for FCFA and garbled "25/11/2026" as written; with the conversion it said "moins trois", "francs CFA", "25 novembre 2026". (The Mac's German system voice already read numbers correctly - no difference there.) Real learnt words for German, French, Spanish. Self-test `python -m providers._speakable_tests [--live]`; new `numbers` check in `core.selftest`. Wording check: 0 overlaps.
 - 2026-11-25 — Capability self-test ✅ (`core/selftest.py`). Run for real on this Mac: offline 13 pass + speaker capture "not set up" (needs BlackHole) in 2 s; with the network, HTTPS verified, the key answered, Playwright's Chrome found. Self-test `python -m core._selftest_tests`. Wording check: 0 overlaps.
 - 2026-11-25 — "On it" lines + see-or-do ✅. Run for real: English and French lines written and recorded (transcripts match the text), see/do verdicts right on every request tried with the app's 62 features once tuned (a first version refused to look at "what's on my screen right now?" — found in the running app, fixed), and in the running app a web search of 8.8 s got "Working on it." played while it ran, after the first request in English had prepared the lines in the background. See-or-do ships off by default: +1.2-1.9 s per look, and the fast model it needs kept answering 503. Self-test `python -m core._on_it_tests [--live]`. Wording check: 0 overlaps in new text.

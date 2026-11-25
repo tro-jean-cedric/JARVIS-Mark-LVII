@@ -1140,6 +1140,13 @@ class JarvisLive:
         return True
 
     def _routine_say(self, text: str) -> None:
+        # Also the system's notification, for a user in another window with the
+        # sound down (core/notify.py; skipped when JARVIS is in front).
+        try:
+            from core import notify
+            notify.away("Reminder", text)
+        except Exception as e:
+            print(f"[Notify] {e}")
         self.plugin_say(
             "[REMINDER — the user asked earlier to be reminded of this now]\n"
             f"{text}\n"

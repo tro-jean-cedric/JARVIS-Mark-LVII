@@ -310,6 +310,17 @@ def check_numbers():
     return FAIL, f"numbers came out as: {de!r} / {fr!r}", "pip install --upgrade babel num2words"
 
 
+def check_notifications():
+    """Whether the system's notifications can be used (nothing is shown)."""
+    from core import notify
+    how, why = notify.method()
+    if not notify.enabled():
+        return OFF, "desktop notifications are switched off", 'set "desktop_notifications": true to use them'
+    if how:
+        return PASS, f"finished tasks and reminders can show a system notification ({how})", ""
+    return OFF, f"no system notifications: {why}", why
+
+
 def check_wake_word():
     from core import wake_word
     if not wake_word.is_installed():
@@ -411,6 +422,7 @@ CHECKS: list[tuple[str, Callable, bool]] = [
     ("speaker_capture", check_speaker_capture, False),
     ("speech_detector", check_speech_detector, False),
     ("numbers", check_numbers, False),
+    ("notifications", check_notifications, False),
     ("wake_word", check_wake_word, False),
     ("screen", check_screen, False),
     ("app_files", check_app_files, False),

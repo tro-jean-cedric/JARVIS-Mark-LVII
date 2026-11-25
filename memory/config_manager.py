@@ -344,6 +344,17 @@ def save_see_or_do_enabled(enabled: bool) -> None:
     _save_flag("see_or_do", enabled)
 
 
+def get_desktop_notifications_enabled() -> bool:
+    """Whether a finished background task or a reminder also shows the
+    system's own notification while the user is in another window
+    (core/notify.py). On by default."""
+    return bool(load_api_keys().get("desktop_notifications", True))
+
+
+def save_desktop_notifications_enabled(enabled: bool) -> None:
+    _save_flag("desktop_notifications", enabled)
+
+
 MEDIA_RESOLUTIONS = ("default", "low", "medium", "high")
 
 

@@ -70,6 +70,15 @@ def _call(method: str, *args) -> None:
             print(f"[Tasks] {method} failed: {e}")
 
 
+def _desktop(title: str, message: str) -> None:
+    """The system's notification, when the user is in another window."""
+    try:
+        from core import notify
+        notify.away(title, message)
+    except Exception as e:
+        print(f"[Tasks] desktop notification: {e}")
+
+
 def _notify(event: str, task: dict | None, text: str) -> None:
     if not task:
         return
@@ -88,6 +97,10 @@ def _notify(event: str, task: dict | None, text: str) -> None:
         if report:
             body += f"\n\n— Full report: {report}"
         _call("show_content", "BACKGROUND TASK", body[:4000])
+        # Seen even in another window, with the sound off (core/notify.py).
+        headline = next((line.strip() for line in (task.get("result") or "").splitlines()
+                         if line.strip()), "")
+        _desktop("Background task finished", f"{title}: {headline}" if headline else title)
         if deliver == "voice":
             from core import outcome
             _call("request_say",
@@ -100,6 +113,8 @@ def _notify(event: str, task: dict | None, text: str) -> None:
     elif event == "failed":
         _call("write_log", f"ERR: Background task failed — {title}: {(task.get('error') or '')[:160]}")
         if deliver != "silent":
+            _desktop("Background task failed",
+                     f"{title}: {(task.get('error') or 'unknown reason')[:160]}")
             _call("request_say",
                   f"[BACKGROUND TASK FAILED] The background task '{title[:120]}' could not finish: "
                   f"{(task.get('error') or 'unknown reason')[:200]}. Tell the user in one short "
