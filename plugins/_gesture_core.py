@@ -56,6 +56,9 @@ N_ON = {"gentle": 1, "normal": 1, "firm": 2}
 # Thumb-index gap (palm lengths, 3D) that counts as tip contact whatever the
 # joint distances say: see features().
 TIGHT_PINCH = 0.24
+# index reach (|8-0| / |5-0|) under which an all-curled hand counts as closing
+# into a fist, not pinching (fist ~0.9, pinch with curled fingers 1.2-1.35)
+FIST_REACH = 1.15
 PROFILES = {
     "desk": {"min_cutoff": 0.8, "beta": 8.0, "d_cutoff": 1.2, "dead": 0.0012, "offset": True},
     "air": {"min_cutoff": 0.6, "beta": 6.0, "d_cutoff": 1.0, "dead": 0.0008, "offset": False},
@@ -628,7 +631,11 @@ class HandFilter:
         # Every finger curled = a hand closing into a fist, whose thumb may
         # sweep past the index tip on the way: not a pinch (it would click,
         # and cancel the crush, on every unhurried fist).
-        closing_fist = all(fs == "curl" for fs in f.fingers)
+        # Only near a real fist (index tip back towards the wrist): live traces
+        # (Nov 2026) showed deliberate pinches made with the other fingers
+        # curled - all four "curl", index reach 1.2-1.35, tips touching - and
+        # the broader rule refused every one of them.
+        closing_fist = all(fs == "curl" for fs in f.fingers) and f.index_reach < FIST_REACH
         pinch = s.pinch.update(f.r, f.index_reach > 1.0 and f.tip_contact and not closing_fist,
                                f.conf, t)
         mid = s.mid.update(f.r_mid, f.fingers[0] != "curl" and f.r > 0.45, f.conf, t)

@@ -623,13 +623,40 @@ def test_curled_index_pinch():
           not f2.tip_contact, (f2.r, f2.tip_q))
 
 
+def test_closed_hand_pinch():
+    """Live trace (Nov 2026): pinches made with the middle, ring and little
+    fingers curled (all four fingers read "curl", index reach 1.2-1.35) were
+    refused as 'closing into a fist'. They must press; a real fist must not."""
+    from plugins import _gesture_synth as gs
+    from plugins._gesture_core import HandFilter, features
+    curled = (25.0, 90.0, 40.0)          # reach ~1.26, as in the trace
+    fingers = [gs._finger(0, curled, 0.2)] + [gs._finger(k, gs.FIST, 0.2) for k in (1, 2, 3)]
+
+    def hand(gap):
+        tip = gs._add(fingers[0][3], (gap * gs.PALM, 0.0, 0.0))
+        return gs._build(fingers, tip, x=0.5, y=0.6, size=0.18, roll=0.0, yaw=0.0,
+                         aspect=16 / 9, world=True, conf=0.99, side="right")
+    f = features(hand(0.15))
+    check("closed-hand pinch: all four fingers read curled", all(x == "curl" for x in f.fingers),
+          f.fingers)
+    check("closed-hand pinch: index reach above FIST_REACH", f.index_reach >= 1.15, f.index_reach)
+    hf = HandFilter("normal", profile="air")
+    t, pressed = 0.0, False
+    for i in range(40):
+        gap = 0.9 if i < 15 else 0.15        # fingers apart, then together
+        st = hf.update([hand(gap)], t)
+        pressed = pressed or any(getattr(x, "down", False) for x in st)
+        t += 1 / 30
+    check("closed-hand pinch: presses", pressed)
+
+
 def main() -> int:
     print("gesture core self-test")
     for fn in (test_aspect_regression, test_false_pinches, test_real_pinch,
                test_pinch_detector_rule, test_click_drift, test_retro_press, test_lock_unlock,
                test_slots, test_lost, test_cache, test_one_euro, test_poses, test_swipes,
                test_crush, test_crush_end_to_end, test_fake_hand, test_hand_stream,
-               test_camera_stamp, test_curled_index_pinch):
+               test_camera_stamp, test_curled_index_pinch, test_closed_hand_pinch):
         try:
             fn()
         except Exception as e:
