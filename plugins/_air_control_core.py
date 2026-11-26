@@ -71,7 +71,7 @@ from typing import Callable, Optional
 
 # Written by the overlay window (Qt thread), read by the voice tool.
 STATE = {"open": False, "since": 0.0, "status": "", "error": "", "input_ok": False,
-         "keyboard": False}
+         "keyboard": False, "recentered": 0.0}
 
 # ── Tunables (seconds, screen units, picture units) ──────────────────────────
 BOX = {"slow": 0.60, "normal": 0.45, "fast": 0.33}   # mapping box width, picture units
@@ -127,6 +127,11 @@ DICTATE_HOLD = 0.35
 REPEAT_AFTER = 0.5
 REPEAT_RATE = 8.0
 FIST_STOP = 0.3
+# Recentre: a fist (the clutch) held still this long puts the cursor in the
+# middle of the screen, anchored to wherever the hand is now. Also in the menu
+# and by voice ("centre the cursor").
+RECENTER_HOLD = 1.0
+RECENTER_STILL = 0.08         # picture units / s: slower than this counts as still
 TOAST_S = 1.2
 HINT_S = 10.0
 HISTORY_S = 0.5
@@ -138,7 +143,7 @@ OWN_FOCUS = "JARVIS has the keyboard - click into your app first"
 SECURE_NOTE = "\U0001F512 Password field: type this one on your keyboard"
 
 MENU_ITEMS = ("right_click", "keyboard", "back", "forward", "browser", "launcher",
-              "overview", "close_window", "exit")
+              "overview", "center", "close_window", "exit")
 
 
 def _overview_label() -> str:
@@ -152,6 +157,7 @@ def _menu_labels() -> dict:
             "back": ("Back", "←"), "forward": ("Forward", "→"),
             "browser": ("Browser", "◎"), "launcher": ("Launcher", "▦"),
             "overview": (_overview_label(), "⧉"), "close_window": ("Close window", "⊠"),
+            "center": ("Centre cursor", "⊕"),
             "exit": ("Exit", "✕")}
 
 
@@ -425,6 +431,9 @@ class AirEngine:
         self._crush_phase = ("idle", 0.0)
         self._fist_t0: Optional[float] = None
         self._fist_fired = False
+        self._rc_t0: Optional[float] = None
+        self._rc_fired = False
+        self._recenter_pending = False
         self._exit_t0: Optional[float] = None
         self._exit_p = 0.0
         self._paused_until = 0.0
@@ -834,8 +843,32 @@ class AirEngine:
         if last is None or math.hypot(u - last[0], v - last[1]) > MOVE_EPS:
             self._out(acts, ("move", u, v))
 
+    # ── recentre ─────────────────────────────────────────────────────────────
+    def recenter(self) -> None:
+        """Put the cursor in the middle of the screen at the next camera
+        sample, anchored to wherever the hand is then (menu, voice)."""
+        self._recenter_pending = True
+
+    def _recenter_now(self, s, t, acts) -> bool:
+        if self._button:                 # never mid-drag: it would drag to the middle
+            return False
+        self._recenter_pending = False
+        self._cursor = (0.5, 0.5)
+        self._reanchor(s)
+        self._history.clear()
+        self._inertia = None
+        self._out(acts, ("move", 0.5, 0.5))
+        self._last_sent = self._cursor
+        self._commanded = deque([self._cursor], maxlen=2)
+        self._transition_until = t + GUARD   # the jump is not a click
+        self._event("recenter", 0.5, 0.5)
+        self._toast_("⊕ Centred")
+        return True
+
     # ── one new camera sample of the primary hand ────────────────────────────
     def _sample(self, s, t, st, dt, acts) -> None:
+        if self._recenter_pending:
+            self._recenter_now(s, t, acts)
         x, y = _num(s, "x", 0.5), _num(s, "y", 0.5)
         vx, vy = _num(s, "vx"), _num(s, "vy")
         speed = math.hypot(vx, vy)
@@ -939,6 +972,17 @@ class AirEngine:
             self._scroll_sample(s, st, acts)
         else:
             self._v_vel = (0.0, 0.0)
+        # A fist held still: recentre (once per fist).
+        if mode == "clutch" and pose == "fist" and not self._dictating and not modal \
+                and not self._button:
+            if speed > RECENTER_STILL or self._rc_t0 is None:
+                self._rc_t0 = t
+            elif not self._rc_fired and t - self._rc_t0 >= RECENTER_HOLD:
+                self._rc_fired = True
+                self._recenter_now(s, t, acts)
+        else:
+            self._rc_t0 = None
+            self._rc_fired = False
 
         # The cursor.
         if freeze:
@@ -1080,6 +1124,8 @@ class AirEngine:
             self._out(acts, ("launcher",))
         elif item == "overview":
             self._out(acts, ("overview",))
+        elif item == "center":
+            self.recenter()
         elif item == "close_window":
             self._out(acts, ("close_window",))
             self._toast_("Close window")
@@ -1776,6 +1822,8 @@ class AirEngine:
             progress = _clamp((t - self._fist_t0) / FIST_STOP)
         elif self._mode == "clutch":
             ring = "clutch"
+            if self._rc_t0 is not None and not self._rc_fired:
+                progress = _clamp((t - self._rc_t0 - 0.25) / (RECENTER_HOLD - 0.25))
         elif self._pinch == "armed":
             ring = "armed"
         hand = None

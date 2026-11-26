@@ -568,6 +568,13 @@ class AirControlWindow(QWidget):
                 print(f"[AirControl] exit: {e}")
         self.request_close(why)
 
+    def recenter(self) -> None:
+        if self.engine is not None:
+            try:
+                self.engine.recenter()
+            except Exception as e:
+                print(f"[AirControl] recenter: {e}")
+
     def open_keyboard(self) -> None:
         if self.engine is not None:
             try:
@@ -648,6 +655,8 @@ class AirControlWindow(QWidget):
                 self._effects.append((ev[1], ev[2], now, C.ACC))
             elif kind == "exit":
                 exit_why = str(ev[1]) if len(ev) > 1 else "gesture"
+            elif kind == "recenter":
+                self._set_state(recentered=time.time())
         self._effects = [e for e in self._effects if now - e[2] < 0.6]
         self._view = self.engine.view(now)
         status = str(getattr(self._view, "status", "") or "")
@@ -847,7 +856,10 @@ class AirControlWindow(QWidget):
             p.drawEllipse(c, r, r)
             p.setPen(with_alpha(C.TEXT_MED, 0.9))
             p.setFont(px_font(14, QFont.Weight.Bold))
-            p.drawText(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), Qt.AlignmentFlag.AlignCenter, "⏸")
+            p.drawText(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), Qt.AlignmentFlag.AlignCenter,
+                       "⊕" if progress > 0 else "⏸")
+            if progress > 0:                          # a still fist: recentring
+                self._arc(p, c, r + 8, progress, C.PRI, 3)
             return
         if ring == "crush":
             p.setPen(QPen(with_alpha(C.RED, 0.35), 6))

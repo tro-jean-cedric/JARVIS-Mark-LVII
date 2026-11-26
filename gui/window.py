@@ -617,6 +617,9 @@ class MainWindow(QMainWindow):
             elif cmd == "keyboard":
                 if self._air is not None:
                     self._air.open_keyboard()
+            elif cmd == "recenter":
+                if self._air is not None:
+                    self._air.recenter()
             elif cmd == "close":
                 self._air_closed()
         except Exception as e:

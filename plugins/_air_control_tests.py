@@ -267,6 +267,50 @@ def test_clutch():
           near(s.eng._cursor, (before[0] + 0.1, before[1]), 0.003), s.eng._cursor)
 
 
+def test_recenter():
+    # A fist held still RECENTER_HOLD s: cursor to the middle, anchored to the hand.
+    s = Sim()
+    s.start()
+    s.move(0.3 * s.bw, 0.2 * s.bh, 10)
+    check("recenter: cursor starts away from the middle",
+          not near(s.eng._cursor, (0.5, 0.5), 0.05), s.eng._cursor)
+    s.clear()
+    s.hold(int(0.6 * FPS), pose="fist")
+    check("recenter: a brief still fist does nothing yet", ("move", 0.5, 0.5) not in s.acts,
+          s.acts)
+    check("recenter: the pause ring shows progress", s.eng.view(s.t).progress > 0,
+          s.eng.view(s.t).progress)
+    s.hold(int(0.6 * FPS), pose="fist")
+    check("recenter: held 1 s -> move to the middle once",
+          s.acts.count(("move", 0.5, 0.5)) == 1, s.acts)
+    check("recenter: event + toast", ("recenter", 0.5, 0.5) in s.events
+          and s.eng.view(s.t).toast is not None, s.events)
+    s.hold(int(1.5 * FPS), pose="fist")
+    check("recenter: only once per fist", s.acts.count(("move", 0.5, 0.5)) == 1, s.acts)
+    s.hold(4, pose="relaxed")
+    s.clear()
+    s.move(0.1 * s.bw, 0.0, 6)
+    check("recenter: afterwards the hand moves the cursor from the middle",
+          near(s.eng._cursor, (0.6, 0.5), 0.01), s.eng._cursor)
+    # a moving fist (a clutch reposition) does not recentre
+    s = Sim()
+    s.start()
+    s.move(0.3 * s.bw, 0.2 * s.bh, 10)
+    s.clear()
+    s.move(0.2, 0.0, int(1.5 * FPS), pose="fist")
+    check("recenter: a moving fist does not recentre", ("move", 0.5, 0.5) not in s.acts, s.acts)
+    # by call (voice / menu)
+    s = Sim()
+    s.start()
+    s.move(0.3 * s.bw, 0.2 * s.bh, 10)
+    s.clear()
+    s.eng.recenter()
+    s.hold(1)
+    check("recenter: recenter() applies at the next sample",
+          ("move", 0.5, 0.5) in s.acts and near(s.eng._cursor, (0.5, 0.5), 1e-6), s.acts)
+    check("recenter: the menu offers it", "center" in ac.MENU_ITEMS)
+
+
 def test_open_hand_moves():
     # Live trace (Nov 2026): a real resting hand flickers between "open" and
     # "relaxed". Both must simply move the cursor - no freeze, no void.

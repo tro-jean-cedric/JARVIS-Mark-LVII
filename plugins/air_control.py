@@ -49,7 +49,8 @@ PLUGIN = {
         "properties": {
             "action": {"type": "STRING",
                        "description": "start (the default: a bare 'air control' means start), stop, "
-                                      "status, dictate, keyboard or help"},
+                                      "status, dictate, keyboard, center (put the cursor back "
+                                      "in the middle of the screen) or help"},
             "op": {"type": "STRING",
                    "description": "for dictate: start, stop, send (press Enter) or undo "
                                   "(remove the last phrase)"},
@@ -106,8 +107,9 @@ HELP = (
     "middle finger: right click. Two fingers up (V): scroll. Fist: pauses the cursor so the "
     "hand can be repositioned (like lifting a mouse); a quick fist flick left or right "
     "switches desktop, up shows all windows, down shows the app's windows or the desktop. "
+    "Fist held still a second: the cursor jumps back to the middle of the screen. "
     "Pinch held still about a second: a menu (right click, keyboard, back, forward, browser, "
-    "launcher, Mission Control, close window, exit); letting go in its middle just clicks. "
+    "launcher, Mission Control, centre cursor, close window, exit); letting go in its middle just clicks. "
     "In a text field a bar offers Dictate "
     "and an air keyboard. To stop: both hands open and still for a second, Esc, or say "
     "'stop air control'. Explain the essentials in two or three sentences, in the user's "
@@ -295,6 +297,18 @@ def run(parameters: dict, player=None, session_memory=None) -> str:
                 return outcome.done("air_control", keyboard="shown")
             return outcome.unverified("air_control", "asked for the air keyboard but it did "
                                                      "not appear (a password field refuses it)")
+        if action in ("center", "centre", "recenter", "recentre"):
+            if not core.STATE.get("open"):
+                return outcome.failed("air_control", "Air Control is not on; start it first")
+            ui = _ui(player)
+            if ui is None:
+                return outcome.failed("air_control", "the JARVIS window is not reachable")
+            core.STATE["recentered"] = 0.0
+            ui.air_control("recenter")
+            if _wait(lambda: core.STATE.get("recentered"), INPUT_WAIT):
+                return outcome.done("air_control", cursor="centred")
+            return outcome.unverified("air_control", "asked to centre the cursor; it happens as "
+                                                     "soon as a hand is in view (none is now)")
         if action == "help":
             return HELP
         return outcome.failed("air_control", "unsupported action - valid: start, stop, status, "
