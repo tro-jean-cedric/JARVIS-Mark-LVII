@@ -80,9 +80,14 @@ MIN_AGE = 6                 # a hand younger than this (camera frames) cannot cl
 FAST_PRESS = 0.6            # x box width per second: faster than this, a press is void
 POSE_SETTLE = 0.1           # a press this soon after a pose change is void
 CLICK_MOVE = 0.025          # pending -> drag beyond this
-DRAG_SETTLE = 0.25          # held this long, a pinch becomes a drag past HOLD_STILL:
-                            # live traces (Nov 2026) showed slow starts taking
-                            # 0.8-1.0 s to cross CLICK_MOVE, then a 3% jump
+# A held pinch: still (within DRAG_MOVE) -> the menu at HOLD_TIME; moved past
+# DRAG_MOVE, or moving steadily faster than DRAG_SPEED -> a drag. Measured on a
+# real hand (Nov 2026): a still hold drifts 0.004-0.02 of the picture in its
+# first 0.9 s (1-4.5% of the box); the old 1.2% made the menu a lottery and
+# turned most holds into drags on nothing ("the sound, then nothing").
+DRAG_MOVE = 0.045           # box units
+DRAG_SPEED = 0.05           # picture units / s: faster than a holding hand drifts
+DRAG_SPEED_AFTER = 0.2      # s: a quick tap with a wobble stays a click
 HOLD_STILL = 0.012          # the menu needs the pinch this still...
 HOLD_TIME = 0.9             # ...for this long
 HOLD_ARC = 0.3              # the menu's arc starts filling here
@@ -993,7 +998,9 @@ class AirEngine:
         if g.kind == "pending":
             d = math.hypot((x - g.ax) / self.bw, (y - g.ay) / self.bh)
             g.moved = max(g.moved, d)
-            if d > CLICK_MOVE or (t - g.t0 >= DRAG_SETTLE and d > HOLD_STILL):
+            speed = math.hypot(_num(s, "vx"), _num(s, "vy"))
+            steady = t - g.t0 >= DRAG_SPEED_AFTER and speed > DRAG_SPEED
+            if d > DRAG_MOVE or (d > HOLD_STILL and steady):
                 g.kind = "drag"
                 self._out(acts, ("move", g.u0, g.v0))
                 self._out(acts, ("button", True, "left"))
@@ -1011,7 +1018,7 @@ class AirEngine:
     def _grip_release(self, g: _Grip, s, t, acts) -> None:
         self._grip = None
         if g.kind == "pending":
-            if t - g.t0 <= HOLD_TIME and g.moved <= CLICK_MOVE:
+            if t - g.t0 <= HOLD_TIME:
                 lc = self._last_click
                 count = 2 if (lc and t - lc[0] < DOUBLE_T and
                               math.hypot(g.u0 - lc[1], g.v0 - lc[2]) < DOUBLE_D) else 1
@@ -1250,7 +1257,7 @@ class AirEngine:
     def _timers(self, s, t, acts) -> None:
         g = self._grip
         if g is not None:
-            if g.kind == "pending" and g.moved < HOLD_STILL and t - g.t0 >= HOLD_TIME:
+            if g.kind == "pending" and g.moved < DRAG_MOVE and t - g.t0 >= HOLD_TIME:
                 self._open_menu(g)
             elif g.kind == "drag":
                 c = self._cursor
@@ -1748,7 +1755,7 @@ class AirEngine:
             ring = "hold"
         elif g is not None and g.kind == "pending":
             held = t - g.t0
-            if held >= HOLD_ARC and g.moved < HOLD_STILL:
+            if held >= HOLD_ARC and g.moved < DRAG_MOVE:
                 ring = "hold"
                 progress = _clamp((held - HOLD_ARC) / (HOLD_TIME - HOLD_ARC))
             else:

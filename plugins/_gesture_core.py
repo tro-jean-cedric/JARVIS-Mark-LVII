@@ -250,8 +250,16 @@ def features(hand, prev: Optional[Features] = None) -> Features:
         if world is not None:
             sw = _dist(world[0], world[9])
             r_world = _dist(world[4], world[8]) / sw
-            r = max(r_world, r_img)
-            r_mid = max(_dist(world[4], world[12]) / sw, rmid_img)
+            # The image decides, the world model can only veto a clear gap.
+            # It used to be max(world, image): live traces (Nov 2026) showed
+            # tips touching in the picture (r_img 0.07-0.10) while the metric
+            # model never closed below 0.26-0.30, so real pinches and taps
+            # never crossed ON. A side-on open finger still gets vetoed: its
+            # world gap is large and the cap 2*r_img + 0.05 stays above ON
+            # unless the tips truly meet in the picture too.
+            r = max(r_img, min(r_world, 2.0 * r_img + 0.05))
+            rw_mid = _dist(world[4], world[12]) / sw
+            r_mid = max(rmid_img, min(rw_mid, 2.0 * rmid_img + 0.05))
         geo = world if world is not None else iso
         index_reach = _dist(geo[8], geo[0]) / max(_dist(geo[5], geo[0]), 1e-9)
         d48 = _dist(geo[4], geo[8])
@@ -260,8 +268,13 @@ def features(hand, prev: Optional[Features] = None) -> Features:
         # made with a CURLED index folds the tip back next to joints 6/7, so
         # the ratio alone refused real pinches (live trace, Nov 2026: r_world
         # 0.21-0.23 held 0.4 s, never pressed). Tips this close always count.
-        tight = d48 / max(_dist(geo[0], geo[9]), 1e-9) <= TIGHT_PINCH
-        tip_contact = tip_q <= 1.0 or tight
+        tight = r <= TIGHT_PINCH
+        # The same test in the picture: the world model's fingertips are the
+        # part it gets least right (see r above).
+        tip_q_img = _dist(iso[4], iso[8]) / max(min(_dist(iso[4], iso[6]),
+                                                    _dist(iso[4], iso[7])), 1e-9)
+        tip_contact = tip_q <= 1.0 or tip_q_img <= 1.0 or tight
+        tip_q = min(tip_q, tip_q_img)
         old = prev.fingers if prev is not None and len(getattr(prev, "fingers", ())) == 4 \
             else ("mid",) * 4
         fingers = []
@@ -322,7 +335,7 @@ class PinchDetector:
 
     def __init__(self, on: float, off: float, n_on: int = 1, n_off: int = 2,
                  fast_release: float = 0.20, min_conf: float = 0.88,
-                 came_window: float = 0.5, came_delta: float = 0.08,
+                 came_window: float = 1.2, came_delta: float = 0.08,
                  came_from: Optional[float] = None):
         self.on, self.off = float(on), float(off)
         self.n_on, self.n_off = max(1, int(n_on)), max(1, int(n_off))
@@ -635,8 +648,14 @@ class HandFilter:
         # (Nov 2026) showed deliberate pinches made with the other fingers
         # curled - all four "curl", index reach 1.2-1.35, tips touching - and
         # the broader rule refused every one of them.
-        closing_fist = all(fs == "curl" for fs in f.fingers) and f.index_reach < FIST_REACH
-        pinch = s.pinch.update(f.r, f.index_reach > 1.0 and f.tip_contact and not closing_fist,
+        closed = all(fs == "curl" for fs in f.fingers)
+        closing_fist = closed and f.index_reach < FIST_REACH
+        # With the other fingers curled the thumb rests beside the index, so a
+        # closed-hand pinch must be a clearly tight one (replayed traces: loose
+        # 0.23-0.28 'touches' in a resting closed hand were not pinches).
+        loose_closed = closed and f.r > TIGHT_PINCH
+        pinch = s.pinch.update(f.r, f.index_reach > 1.0 and f.tip_contact and not closing_fist
+                               and not loose_closed,
                                f.conf, t)
         mid = s.mid.update(f.r_mid, f.fingers[0] != "curl" and f.r > 0.45, f.conf, t)
         pose = s.poses.update(f, pinch, mid, t)

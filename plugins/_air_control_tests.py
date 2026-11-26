@@ -414,19 +414,31 @@ def test_drag():
 
 
 def test_slow_drag_starts_early():
-    # Live trace (Nov 2026): pinch, then a SLOW start (0.01-0.04 of the frame
-    # per second). The drag only began after 0.8-1.0 s and then jumped.
+    # Live traces (Nov 2026): a STILL hold drifts ~0.02 of the picture per
+    # second; a deliberate slow drag moves faster than DRAG_SPEED.
     s = Sim()
     s.start()
     s.point_at(0.5, 0.5)
     s.clear()
     s.press()
-    s.hold(int(0.3 * FPS), down=True, pinch="pressed", pose="pinch")   # settles
+    s.hold(int(0.3 * FPS), down=True, pinch="pressed", pose="pinch")
     t0 = s.t
-    s.move(0.02 * s.bw, 0.0, 8, down=True, pinch="pressed", pose="pinch")  # slow
+    n = 8
+    s.move(0.08 * n * DT, 0.0, n, down=True, pinch="pressed", pose="pinch")   # 0.08 pic/s
     started = [e for e in s.events if e[0] == "drag_start"]
-    check("slow drag: starts once a settled pinch moves past HOLD_STILL",
+    check("slow drag: a deliberate slow move starts the drag promptly",
           bool(started) and s.t - t0 < 0.4, (s.t - t0, s.events))
+    s.release()
+    s = Sim()
+    s.start()
+    s.point_at(0.5, 0.5)
+    s.clear()
+    s.press()
+    n = int(1.0 * FPS)
+    s.move(0.02 * n * DT, 0.0, n, down=True, pinch="pressed", pose="pinch")   # drift 0.02/s
+    check("slow drag: a drifting hold is NOT a drag - it opens the menu",
+          not any(e[0] == "drag_start" for e in s.events)
+          and any(e[0] == "menu_open" for e in s.events), s.events)
     s.release()
     s = Sim()
     s.start()
@@ -437,7 +449,6 @@ def test_slow_drag_starts_early():
     s.release()
     check("slow drag: a quick tap with a little drift is still a click",
           ("click", "left", 1) in s.acts and "button" not in s.kinds(), s.acts)
-
 
 def test_menu_centre_release_clicks():
     s = Sim()

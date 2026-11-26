@@ -650,13 +650,49 @@ def test_closed_hand_pinch():
     check("closed-hand pinch: presses", pressed)
 
 
+def test_quick_tap_world_lag():
+    """Live trace (Nov 2026): tips touching in the picture (gap ~0.08) while
+    the metric world model still says 0.26-0.30. A quick 2-frame tap and a
+    slow 1 s close must both press; an open hand must not."""
+    from plugins import _gesture_synth as gs
+    from plugins._gesture_core import HandFilter
+
+    def hand(gap, world_gap=None):
+        h = gs.make_hand("pinch", gap=gap)
+        if world_gap is not None and h.world:
+            w = [list(p) for p in h.world]
+            tip8 = w[8]
+            d = [w[4][k] - tip8[k] for k in range(3)]
+            n = max(sum(x * x for x in d) ** 0.5, 1e-9)
+            want = world_gap * gs.PALM
+            w[4] = [tip8[k] + d[k] / n * want for k in range(3)]
+            h.world = [tuple(p) for p in w]
+        return h
+
+    def run(seq):
+        hf, t, down = HandFilter("normal", profile="air"), 0.0, False
+        for g, wg in seq:
+            st = hf.update([hand(g, wg)], t)
+            down = down or any(getattr(x, "down", False) for x in st)
+            t += 1 / 18                      # the real camera's rate
+        return down
+    open_ = [(0.9, None)] * 10
+    check("quick tap: 2 frames, world model lagging -> presses",
+          run(open_ + [(0.08, 0.28)] * 2 + [(0.9, None)] * 6))
+    slow = [(0.9 - (0.9 - 0.08) * i / 18, max(0.28, 0.9 - (0.9 - 0.08) * i / 18))
+            for i in range(19)]
+    check("slow 1 s close, world model lagging -> presses", run(open_ + slow + [(0.08, 0.28)] * 4))
+    check("open hand never presses", not run(open_ * 4))
+
+
 def main() -> int:
     print("gesture core self-test")
     for fn in (test_aspect_regression, test_false_pinches, test_real_pinch,
                test_pinch_detector_rule, test_click_drift, test_retro_press, test_lock_unlock,
                test_slots, test_lost, test_cache, test_one_euro, test_poses, test_swipes,
                test_crush, test_crush_end_to_end, test_fake_hand, test_hand_stream,
-               test_camera_stamp, test_curled_index_pinch, test_closed_hand_pinch):
+               test_camera_stamp, test_curled_index_pinch, test_closed_hand_pinch,
+               test_quick_tap_world_lag):
         try:
             fn()
         except Exception as e:
