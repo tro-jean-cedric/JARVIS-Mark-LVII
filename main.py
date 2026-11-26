@@ -228,6 +228,13 @@ _TAIL_MARGIN = 0.25
 # for a slow tool call (those send their own traffic, which clears the deadline)
 # while turning an unbounded hang into a blip.
 _STALL_LIMIT = 30.0
+# A LOCAL pipeline (providers/engine_pipeline) is not a socket that can die
+# silently: a slow turn there is a model still reading its prompt. Measured
+# (Ollama, Nov 2026): a 27.6k-token prompt the server could not reuse took
+# ~40 s, so a 30 s watchdog aborted it every time - and an aborted pass is
+# never cached, so the next turn started from zero again, for ever. The
+# pipeline has its own LLM timeout; the watchdog only needs to outlast it.
+_STALL_LIMIT_PIPELINE = 90.0
 
 _VIS_WIN = 1024        # ~43 ms analysis window at 24 kHz: enough for formants
 _VIS_HOP = 480         # 20 ms between frames, i.e. 50 shapes a second
@@ -1330,7 +1337,18 @@ class JarvisLive:
         into a dead socket would keep resetting the very timer meant to catch it.
         """
         if self._rx_deadline is None:
-            self._rx_deadline = time.monotonic() + _STALL_LIMIT
+            self._rx_deadline = time.monotonic() + self._stall_limit()
+
+    def _stall_limit(self) -> float:
+        """30 s for Gemini Live; for a local pipeline, past its own LLM timeout."""
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            return _STALL_LIMIT
+        try:
+            llm_timeout = float(getattr(getattr(engine, "_llm", None), "timeout", 60.0) or 60.0)
+        except (TypeError, ValueError):
+            llm_timeout = 60.0
+        return max(_STALL_LIMIT_PIPELINE, llm_timeout + 30.0)
 
     def _clear_stall(self) -> None:
         """The server spoke, so the return path is alive."""
@@ -1349,7 +1367,7 @@ class JarvisLive:
             if deadline is None or time.monotonic() < deadline:
                 continue
             self._clear_stall()
-            print(f"[JARVIS] ⚠️  No response for {_STALL_LIMIT:.0f}s — "
+            print(f"[JARVIS] ⚠️  No response for {self._stall_limit():.0f}s — "
                   f"the live session is not answering. Rebuilding it.")
             self.ui.write_log("SYS: The model stopped answering — reconnecting.")
             self.request_reconnect(keep_context=True, reason="no response")
