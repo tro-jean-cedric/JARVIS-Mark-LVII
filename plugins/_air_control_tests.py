@@ -413,6 +413,46 @@ def test_drag():
           any(e[0] == "drag_start" for e in s.events) and any(e[0] == "drag_end" for e in s.events))
 
 
+def test_slow_drag_starts_early():
+    # Live trace (Nov 2026): pinch, then a SLOW start (0.01-0.04 of the frame
+    # per second). The drag only began after 0.8-1.0 s and then jumped.
+    s = Sim()
+    s.start()
+    s.point_at(0.5, 0.5)
+    s.clear()
+    s.press()
+    s.hold(int(0.3 * FPS), down=True, pinch="pressed", pose="pinch")   # settles
+    t0 = s.t
+    s.move(0.02 * s.bw, 0.0, 8, down=True, pinch="pressed", pose="pinch")  # slow
+    started = [e for e in s.events if e[0] == "drag_start"]
+    check("slow drag: starts once a settled pinch moves past HOLD_STILL",
+          bool(started) and s.t - t0 < 0.4, (s.t - t0, s.events))
+    s.release()
+    s = Sim()
+    s.start()
+    s.point_at(0.5, 0.5)
+    s.clear()
+    s.press()
+    s.move(0.015 * s.bw, 0.0, 3, down=True, pinch="pressed", pose="pinch")  # quick tap drift
+    s.release()
+    check("slow drag: a quick tap with a little drift is still a click",
+          ("click", "left", 1) in s.acts and "button" not in s.kinds(), s.acts)
+
+
+def test_menu_centre_release_clicks():
+    s = Sim()
+    s.start()
+    s.point_at(0.5, 0.5)
+    s.clear()
+    s.press()
+    s.hold(int(1.2 * FPS), down=True, pinch="pressed", pose="pinch")
+    check("slow click: the held pinch opened the menu",
+          any(e[0] == "menu_open" for e in s.events), s.events)
+    s.release()
+    check("slow click: letting go in the middle of the menu clicks",
+          ("click", "left", 1) in s.acts, s.acts)
+
+
 def test_drag_through_pump():
     """The engine's drag start through a REAL InputPump: the press lands at the
     pinch point, not at the drifted hand (the pump keeps move/job order)."""

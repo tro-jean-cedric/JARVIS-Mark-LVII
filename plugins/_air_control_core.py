@@ -80,6 +80,9 @@ MIN_AGE = 6                 # a hand younger than this (camera frames) cannot cl
 FAST_PRESS = 0.6            # x box width per second: faster than this, a press is void
 POSE_SETTLE = 0.1           # a press this soon after a pose change is void
 CLICK_MOVE = 0.025          # pending -> drag beyond this
+DRAG_SETTLE = 0.25          # held this long, a pinch becomes a drag past HOLD_STILL:
+                            # live traces (Nov 2026) showed slow starts taking
+                            # 0.8-1.0 s to cross CLICK_MOVE, then a 3% jump
 HOLD_STILL = 0.012          # the menu needs the pinch this still...
 HOLD_TIME = 0.9             # ...for this long
 HOLD_ARC = 0.3              # the menu's arc starts filling here
@@ -114,6 +117,7 @@ SWIPE_MIN_AVG = 1.5
 CRUSH_IN_AIR = False        # see _new_crush
 MENU_R = 0.11
 MENU_HIT = 0.07
+MENU_CENTRE = 0.45          # x MENU_R: letting go this near the middle clicks
 DICTATE_HOLD = 0.35
 REPEAT_AFTER = 0.5
 REPEAT_RATE = 8.0
@@ -989,7 +993,7 @@ class AirEngine:
         if g.kind == "pending":
             d = math.hypot((x - g.ax) / self.bw, (y - g.ay) / self.bh)
             g.moved = max(g.moved, d)
-            if d > CLICK_MOVE:
+            if d > CLICK_MOVE or (t - g.t0 >= DRAG_SETTLE and d > HOLD_STILL):
                 g.kind = "drag"
                 self._out(acts, ("move", g.u0, g.v0))
                 self._out(acts, ("button", True, "left"))
@@ -1025,12 +1029,27 @@ class AirEngine:
             self._event("drag_end", self._cursor[0], self._cursor[1])
             self._frozen = False
         elif g.kind == "menu":
-            item = self._menu.get("hover", "") if self._menu else ""
+            m = self._menu or {}
+            item = m.get("hover", "")
+            centre = False
+            if not item and m:
+                u, v = self._cursor
+                centre = math.hypot((u - m["x"]) * self.screen_aspect, v - m["y"]) \
+                    < MENU_R * MENU_CENTRE
             self._menu = None
             self._cursor = (g.u0, g.v0)
             self._reanchor(s)
             if item:
                 self._menu_act(item, g, t, acts)
+            elif centre:
+                # A slow click: live traces (Nov 2026) showed pinches held
+                # 1.1-1.4 s that opened the menu when a click was meant.
+                # Let go in the middle = the click; away from it = cancel.
+                self._out(acts, ("move", g.u0, g.v0))
+                self._out(acts, ("click", "left", 1))
+                self._event("click", g.u0, g.v0, 1)
+                self._caret_moved()
+                self._last_click = (t, g.u0, g.v0)
         elif g.kind == "ui":
             if g.target == "bar:dictate":
                 self._out(acts, ("dictate", "hold_stop" if g.hold_fired else "toggle"))
