@@ -479,7 +479,8 @@ class OpenAICompatLLM:
                   enumerate(msg.get("tool_calls") or [])])
         return text, buf.drain()
 
-    async def warmup(self, log=print) -> None:
+    async def warmup(self, log=None, messages: list[dict] | None = None,
+                     tools: list[dict] | None = None) -> None:
         """Load a LOCAL model before the first turn.
 
         Measured live (Nov 2026, Ollama qwen3.5:35b): the first turn after
@@ -488,7 +489,13 @@ class OpenAICompatLLM:
         turn answered in 8 s. One token here, at startup, takes that load off
         the user's first sentence. Only for a server on this machine: a cloud
         endpoint has nothing to load and every call there may cost money.
+        `messages` / `tools`: the engine's real system prompt and tool list.
+        Measured again (Ollama log, Nov 2026): with the model already loaded,
+        the FIRST real turn still took 30.1 s, the next 1.6 s - the cost is
+        the first pass over the ~12k-token prompt prefix, which the server then
+        caches. Warming with that same prefix moves it to startup.
         Never raises."""
+        log = log or print
         try:
             host = (self.base.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0]).lower()
             if host not in ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"):
@@ -497,7 +504,9 @@ class OpenAICompatLLM:
 
             def _one_token():
                 with self._httpx.Client(timeout=300.0, trust_env=self._trust_env) as cl:
-                    body = self._body([{"role": "user", "content": "hi"}], None, False, None)
+                    msgs = [m for m in (messages or []) if m.get("role") == "system"]
+                    msgs.append({"role": "user", "content": "hi"})
+                    body = self._body(msgs, tools, False, None)
                     body["max_tokens"] = 1
                     r = cl.post(f"{self.base}/chat/completions", headers=self._headers(),
                                 json=body)

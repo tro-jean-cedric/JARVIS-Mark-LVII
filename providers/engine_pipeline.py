@@ -397,10 +397,18 @@ class PipelineEngine:
         # Both ends, concurrently: the speech model and the voice each have a
         # one-off cost, and they do not need each other.
         jobs = []
-        for part in (self._stt, self._tts, self._llm):
+        for part in (self._stt, self._tts):
             warm = getattr(part, "warmup", None)
             if warm is not None:
                 jobs.append(warm(self._log))
+        # The language model warms with the real system prompt and tools: the
+        # first pass over that prefix is what the first turn used to pay.
+        warm = getattr(self._llm, "warmup", None)
+        if warm is not None:
+            try:
+                jobs.append(warm(None, self._messages()[:1], self._tools))
+            except TypeError:
+                jobs.append(warm(None))
         if jobs:
             await asyncio.gather(*jobs, return_exceptions=True)
 
