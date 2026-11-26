@@ -29,7 +29,6 @@ WHAT IS DELIBERATELY NOT HERE
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import contextlib
@@ -371,6 +370,8 @@ class OpenAICompatLLM:
             except Exception:
                 pass
         self.timeout = float(cfg.get("timeout") or 60.0)
+        ka = str(cfg.get("keep_alive") or "").strip()
+        self.keep_alive = (int(ka) if ka.lstrip("-").isdigit() else ka) or "1h"
 
         # A budget on a model running on your own hardware, unless the user
         # chose one themselves.
@@ -445,6 +446,12 @@ class OpenAICompatLLM:
             # calling the right tool. Ollama ignores this for models that
             # cannot think, so it is safe to send to every model it serves.
             body["reasoning_effort"] = "none"
+            # Ollama unloads an idle model after 5 minutes by default, and the
+            # prompt cache goes with it: the next question re-reads thousands
+            # of tokens (measured 15-20 s with qwen3.5:9b). An hour covers the
+            # pauses of a normal day; "keep_alive" in this provider's settings
+            # overrides it (Ollama syntax: "30m", "2h", -1 = never unload).
+            body["keep_alive"] = self.keep_alive
         if "minimax" in self.base:
             # MiniMax's M2 models put their thinking inline as <think>…</think>
             # unless asked not to. The pipeline filters that out of speech, but
@@ -452,6 +459,55 @@ class OpenAICompatLLM:
             # so it is moved out of the answer at the source.
             body["reasoning_split"] = True
         return body
+
+    async def warmup(self, messages: list[dict], tools: list[dict] | None = None,
+                     log=None) -> None:
+        """Have a LOCAL server process the system prompt and tools once, before
+        the user speaks, so the first real turn finds them in its cache.
+
+        Measured 2026-11-25, Ollama + qwen3.5:9b on an M4 Max, JARVIS's ~6k-token
+        prompt: the first question after launch took 7-25 s unwarmed, and
+        0.8 s after this warm-up (3 trials of 3).
+
+        TWO requests, differing only in the last message, and that is measured
+        too: after ONE, the first real question still took ~8 s and only the
+        second was fast. Models with recurrent layers (qwen3.5's hybrid
+        attention) cannot rewind a cache to an arbitrary point; Ollama keeps a
+        resume point where two prompts DIVERGED, and the second request is what
+        creates one exactly at the start of the user's message. `max_tokens: 1`
+        because nothing generated here is wanted.
+
+        Not every model gets the full benefit: qwen3.5:35b-a3b on a 36 GB Mac
+        kept no resume point at all (every NEW conversation start ~11 s, warm
+        or not — only prompts that extend the previous one hit the cache). For
+        it the warm-up still saves the model load. Hosted APIs are skipped: a
+        request there costs money and their caches are not ours to fill.
+        """
+        if not _is_loopback(self.base) or not messages:
+            return
+        t0 = time.monotonic()
+        try:
+            # Long deadline: the first call also loads the model from disk.
+            async with self._httpx.AsyncClient(timeout=max(self.timeout, 300.0),
+                                               trust_env=self._trust_env) as cl:
+                for last in (".", "Bonjour"):
+                    msgs = messages[:-1] + [{"role": "user", "content": last}]
+                    body = self._body(msgs, tools, False, None)
+                    body["max_tokens"] = 1
+                    r = await cl.post(f"{self.base}/chat/completions",
+                                      headers=self._headers(), json=body)
+                    if r.status_code >= 400:
+                        if log:
+                            log(f"SYS: language model warm-up refused: "
+                                f"{r.status_code} {_terse(r.text)}")
+                        return
+        except Exception as e:
+            if log:
+                log(f"SYS: language model warm-up failed: {type(e).__name__}: {e}")
+            return
+        if log:
+            log(f"SYS: language model ready in {time.monotonic() - t0:.1f}s "
+                f"({self.model})")
 
     # -- one-shot, synchronous: this is what core/gemini.py's ladder uses ----
     def complete(self, messages: list[dict], tools: list[dict] | None = None,
@@ -478,47 +534,6 @@ class OpenAICompatLLM:
         buf.feed([{"index": i, **tc} for i, tc in
                   enumerate(msg.get("tool_calls") or [])])
         return text, buf.drain()
-
-    async def warmup(self, log=None, messages: list[dict] | None = None,
-                     tools: list[dict] | None = None) -> None:
-        """Load a LOCAL model before the first turn.
-
-        Measured live (Nov 2026, Ollama qwen3.5:35b): the first turn after
-        launch waited for the model to load past main.py's 30 s "no response"
-        watchdog, which rebuilt the session and dropped that turn; the second
-        turn answered in 8 s. One token here, at startup, takes that load off
-        the user's first sentence. Only for a server on this machine: a cloud
-        endpoint has nothing to load and every call there may cost money.
-        `messages` / `tools`: the engine's real system prompt and tool list.
-        Measured again (Ollama log, Nov 2026): with the model already loaded,
-        the FIRST real turn still took 30.1 s, the next 1.6 s - the cost is
-        the first pass over the ~12k-token prompt prefix, which the server then
-        caches. Warming with that same prefix moves it to startup.
-        Never raises."""
-        log = log or print
-        try:
-            host = (self.base.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0]).lower()
-            if host not in ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0"):
-                return
-            t0 = time.monotonic()
-
-            def _one_token():
-                with self._httpx.Client(timeout=300.0, trust_env=self._trust_env) as cl:
-                    msgs = [m for m in (messages or []) if m.get("role") == "system"]
-                    msgs.append({"role": "user", "content": "hi"})
-                    body = self._body(msgs, tools, False, None)
-                    body["max_tokens"] = 1
-                    r = cl.post(f"{self.base}/chat/completions", headers=self._headers(),
-                                json=body)
-                    return r.status_code
-
-            code = await asyncio.to_thread(_one_token)
-            log(f"[Pipeline] language model warm ({time.monotonic() - t0:.1f}s, HTTP {code})")
-        except Exception as e:
-            try:
-                log(f"[Pipeline] language model warm-up skipped: {e}")
-            except Exception:
-                pass
 
     # -- streaming, async: this is what the pipeline engine will use ---------
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
